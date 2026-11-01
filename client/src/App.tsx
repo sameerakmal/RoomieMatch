@@ -6,6 +6,8 @@ import { DashboardPage } from './pages/DashboardPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { PreferencesPage } from './pages/PreferencesPage';
+import { DiscoverPage } from './pages/DiscoverPage';
+import { MatchDetailPage } from './pages/MatchDetailPage';
 import { AuthRoute } from './components/AuthRoute';
 
 export function App() {
@@ -20,8 +22,12 @@ export function App() {
       '/dashboard': 'Your home base',
       '/profile': 'A little about you',
       '/preferences': 'Roommate preferences',
+      '/discover': 'Roommate discovery',
     };
-    document.title = `RoomieMatch — ${titles[pathname] ?? 'Page not found'}`;
+    const resolvedTitle = pathname.startsWith('/discover/')
+      ? 'Compatibility breakdown'
+      : (titles[pathname] ?? 'Page not found');
+    document.title = `RoomieMatch — ${resolvedTitle}`;
   }, [pathname, hash]);
   return <Routes>
     <Route path="/" element={<LandingPage />} />
@@ -33,6 +39,8 @@ export function App() {
       <Route path="/dashboard" element={<DashboardPage />} />
       <Route path="/profile" element={<ProfilePage />} />
       <Route path="/preferences" element={<PreferencesPage />} />
+      <Route path="/discover" element={<DiscoverPage />} />
+      <Route path="/discover/:userId" element={<MatchDetailPage />} />
     </Route>
     <Route path="*" element={<NotFoundPage />} />
   </Routes>;

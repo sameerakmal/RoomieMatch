@@ -180,3 +180,91 @@ export interface QuestionnaireFormValues {
   overnightGuestRequirement: 'preferred' | 'required';
   dietarySharingRequirement: 'preferred' | 'required';
 }
+
+// Phase 4: Compatibility Matching & Discovery Types
+export type CategoryKey = 'sleep' | 'cleanliness' | 'noise' | 'guests' | 'budget' | 'lifestyle';
+
+export interface CategoryScoreResult {
+  score: number;
+  weight: number;
+  isAvailable: boolean;
+  explanation?: string;
+}
+
+export interface BudgetOverlapResult {
+  hasOverlap: boolean;
+  min: number | null;
+  max: number | null;
+  overlapSpan: number;
+  userBudget: { min: number; max: number };
+  candidateBudget: { min: number; max: number };
+  explanation: string;
+}
+
+export type ConstraintStatus = 'passed' | 'failed' | 'unknown';
+
+export interface ConstraintEvaluation {
+  id: string;
+  name: string;
+  status: ConstraintStatus;
+  affectedCategory: CategoryKey;
+  explanation: string;
+  direction: 'user-to-candidate' | 'candidate-to-user';
+}
+
+export interface CompatibilityResult {
+  overallScore: number | null;
+  dataCoverage: number;
+  isEligible: boolean;
+  categories: Record<CategoryKey, CategoryScoreResult>;
+  strengths: string[];
+  differences: string[];
+  budgetOverlap: BudgetOverlapResult;
+  constraints: ConstraintEvaluation[];
+  summary: string;
+}
+
+export interface SafeCandidateProfile {
+  id: string;
+  name: string;
+  profile: {
+    city: string;
+    occupation: string;
+    bio: string;
+    profilePhotoUrl: string;
+    age: number | null;
+    moveInDate: string | null;
+  };
+}
+
+export interface MatchDiscoveryItem {
+  candidate: SafeCandidateProfile;
+  compatibility: CompatibilityResult;
+}
+
+export interface MatchesPagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface MatchesResponse {
+  matches: MatchDiscoveryItem[];
+  pagination: MatchesPagination;
+}
+
+export interface MatchDetailResponse {
+  candidate: SafeCandidateProfile;
+  compatibility: CompatibilityResult;
+}
+
+export interface MatchFilters {
+  city?: string;
+  minScore?: number;
+  accommodationType?: string;
+  minBudget?: number;
+  maxBudget?: number;
+  page?: number;
+  limit?: number;
+}

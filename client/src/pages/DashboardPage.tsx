@@ -3,6 +3,7 @@ import {
   ArrowUpRight,
   CalendarDays,
   Check,
+  Compass,
   House,
   Moon,
   Sparkles,
@@ -266,23 +267,40 @@ export function DashboardPage() {
         </section>
       )}
 
-      {/* Discovery teaser */}
+      {/* Discovery entry point */}
       <section id="recommendations" className="recommendations-section">
         <div className="recommendations-heading">
           <h2>Your kind of people</h2>
           <span>Roommate discovery</span>
         </div>
-        <div className="recommendations-empty">
-          <div className="empty-icon">
-            <House size={36} strokeWidth={1.1} />
+        {isPrefComplete ? (
+          <div className="recommendations-active">
+            <div className="active-icon">
+              <Compass size={36} strokeWidth={1.2} />
+            </div>
+            <h3>Your questionnaire is complete and ready.</h3>
+            <p>
+              Our compatibility matching engine is active. Explore roommates who match your daily rhythms, cleanliness expectations, sound boundaries, and budget.
+            </p>
+            <ButtonLink to="/discover" variant="primary">
+              Explore compatible roommates <ArrowUpRight size={16} />
+            </ButtonLink>
           </div>
-          <h3>Room for a great connection.</h3>
-          <p>
-            Roommate discovery and compatibility matching are coming in the next phase. Complete your
-            profile and lifestyle questionnaire so our algorithm can pair you with like-minded home companions.
-          </p>
-          <span className="coming-soon">Phase 4 Compatibility Algorithm coming soon</span>
-        </div>
+        ) : (
+          <div className="recommendations-empty">
+            <div className="empty-icon">
+              <House size={36} strokeWidth={1.1} />
+            </div>
+            <h3>Room for a great connection.</h3>
+            <p>
+              Roommate discovery requires your lifestyle questionnaire. Complete all five sections
+              so our matching algorithm can recommend candidates with compatible daily habits and mutual living requirements.
+            </p>
+            <ButtonLink to="/preferences" variant="secondary">
+              Complete questionnaire <ArrowUpRight size={16} />
+            </ButtonLink>
+          </div>
+        )}
       </section>
 
       {/* Editorial banner */}

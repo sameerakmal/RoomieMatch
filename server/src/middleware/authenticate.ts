@@ -14,12 +14,15 @@ export const requireDatabase: RequestHandler = (_request, _response, next) => {
   next();
 };
 export const authenticate: RequestHandler = async (request, response, next) => {
-  const token: unknown = request.cookies?.[authCookieName];
+  const token: unknown =
+    request.cookies?.[authCookieName] ??
+    request.cookies?.['__Host-roomiematch_session'] ??
+    request.cookies?.['roomiematch_session'];
   let userId: string;
   try {
     userId = verifyAuthToken(token);
   } catch {
-    clearAuthentication(response);
+    if (token) clearAuthentication(response);
     throw new HttpError(401, 'Please log in to continue.');
   }
   if (mongoose.connection.readyState !== 1) throw new HttpError(503, 'Account services are temporarily unavailable. Please try again shortly.');

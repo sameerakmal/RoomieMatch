@@ -36,10 +36,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const controller = new AbortController();
     void refresh(controller.signal);
     const interceptor = api.interceptors.response.use(response => response, (cause: unknown) => {
-      if (axios.isAxiosError(cause) && cause.response?.status === 401 && cause.config?.url?.startsWith('/profile')) {
-        revision.current++;
-        setUser(null);
-        setStatus('anonymous');
+      if (axios.isAxiosError(cause) && cause.response?.status === 401) {
+        const url = cause.config?.url;
+        if (!url?.startsWith('/auth/login') && !url?.startsWith('/auth/register')) {
+          revision.current++;
+          setUser(null);
+          setStatus('anonymous');
+        }
       }
       return Promise.reject(cause);
     });

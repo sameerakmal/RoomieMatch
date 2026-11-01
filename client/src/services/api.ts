@@ -4,7 +4,10 @@ import type { ApiErrorBody, HealthResponse } from '../types';
 // Axios's withCredentials is the equivalent of fetch's credentials: 'include'.
 // The JWT stays in an HttpOnly cookie and is never read or stored by JavaScript.
 const rawApiUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
-const normalizedBaseUrl = rawApiUrl
+// When running in production on Vercel, requests must route through the same-origin /api reverse proxy
+// to prevent Apple WebKit ITP from dropping cross-origin HttpOnly session cookies on iPhones.
+const isVercelHost = typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app');
+const normalizedBaseUrl = (rawApiUrl && !isVercelHost)
   ? (rawApiUrl.endsWith('/api') ? rawApiUrl.replace(/\/+$/, '') : `${rawApiUrl.replace(/\/+$/, '')}/api`)
   : '/api';
 

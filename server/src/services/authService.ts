@@ -15,10 +15,17 @@ export const jwtOptions = { algorithm: 'HS256' as const, issuer: 'roomiematch-ap
 
 export function authenticateResponse(response: Response, user: UserDocument): void {
   const token = jwt.sign({}, env.jwtSecret, { ...jwtOptions, subject: user.id as string, expiresIn: env.jwtExpiresInSeconds });
-  response.cookie(authCookieName, token, { ...cookieOptions, maxAge: env.jwtExpiresInSeconds * 1000 });
+  response.cookie(authCookieName, token, {
+    ...cookieOptions,
+    ...(env.cookieSameSite === 'none' ? { partitioned: true } : {}),
+    maxAge: env.jwtExpiresInSeconds * 1000,
+  });
 }
 export function clearAuthentication(response: Response): void {
-  response.clearCookie(authCookieName, cookieOptions);
+  response.clearCookie(authCookieName, {
+    ...cookieOptions,
+    ...(env.cookieSameSite === 'none' ? { partitioned: true } : {}),
+  });
 }
 export function verifyAuthToken(token: unknown): string {
   if (typeof token !== 'string') throw new Error('Missing token');

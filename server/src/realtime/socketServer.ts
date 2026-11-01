@@ -146,7 +146,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
     try {
       const cookieHeader = socket.handshake.headers.cookie;
       const cookies = parseCookies(cookieHeader);
-      const token = cookies[authCookieName];
+      const token = cookies[authCookieName] ?? cookies['__Host-roomiematch_session'] ?? cookies['roomiematch_session'];
 
       if (!token) {
         return next(new Error('Authentication required: missing session cookie.'));

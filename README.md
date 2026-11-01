@@ -94,8 +94,8 @@ Visit `http://127.0.0.1:5173` in your browser.
 
 | Variable | Required in Production | Default | Purpose & Description |
 | :--- | :--- | :--- | :--- |
-| `VITE_API_BASE_URL` | **Yes** in Production | `/api` | Base URL for REST API requests. Set to `https://<your-render-service>.onrender.com/api`. |
-| `VITE_SOCKET_URL` | Optional | Auto-detected | Base URL for Socket.IO connection. If omitted, automatically derived by removing `/api` from `VITE_API_BASE_URL`. |
+| `VITE_API_BASE_URL` | Optional | `/api` | Base URL for REST API requests. Default `/api` routes via Vercel's reverse proxy rewrites, preventing iOS WebKit ITP cookie blocking. |
+| `VITE_SOCKET_URL` | Optional | Auto-detected | Base URL for Socket.IO connection. If omitted, uses current window origin in dev/proxy or derives from `VITE_API_BASE_URL`. |
 
 > [!WARNING]
 > Never prefix backend secrets (`JWT_SECRET`, `MONGODB_URI`) with `VITE_`. Any variable starting with `VITE_` is compiled directly into the client JavaScript bundle.
@@ -183,9 +183,9 @@ Visit `http://127.0.0.1:5173` in your browser.
    - **Root Directory**: Click `Edit` and select `client`.
    - **Build Command**: `npm run build` (or leave default Vite build)
    - **Output Directory**: `dist`
-4. Under **Environment Variables**, add:
-   - `VITE_API_BASE_URL`: `https://roomiematch-api.onrender.com/api` (your Render URL with `/api`)
-   - `VITE_SOCKET_URL`: `https://roomiematch-api.onrender.com` (your Render URL without `/api`)
+4. Under **Environment Variables**:
+   - `VITE_API_BASE_URL`: `/api` (Recommended: routes through Vercel's reverse proxy rewrites in `vercel.json` to keep requests same-origin, ensuring cookies are first-party and preventing iOS WebKit ITP cookie blocking).
+   - `VITE_SOCKET_URL`: Optional (defaults to window origin when using the `/socket.io` rewrite).
 5. Click **Deploy**.
 6. When deployment finishes, copy the deployed Vercel domain (e.g. `https://roomiematch.vercel.app`).
 7. **Crucial Next Step**: Return to Render Dashboard → Environment Variables → update `CLIENT_ORIGIN` to match your exact Vercel URL (without trailing slashes), and trigger a redeploy on Render.
@@ -196,18 +196,13 @@ Visit `http://127.0.0.1:5173` in your browser.
 
 Authentication uses an HttpOnly cookie containing a verified HS256 JWT.
 
-### Cross-Site Deployments (e.g., Vercel + Render)
+### WebKit ITP & First-Party Proxying (iOS Safari & Chrome)
 
-When frontend (`https://xxx.vercel.app`) and backend (`https://yyy.onrender.com`) are on different public domains:
-- Browser requests from Vercel to Render are **cross-origin** and **cross-site**.
-- The session cookie must have:
-  - `SameSite=None`
-  - `Secure=true` (enforced by HTTPS in production)
-  - `HttpOnly=true`
-  - `Path=/`
-- Set `COOKIE_SAME_SITE=none` on Render.
-- `authService` automatically assigns the host-only prefix `__Host-roomiematch_session` in production.
-- CORS explicitly specifies the frontend origin via `CLIENT_ORIGIN` with `credentials: true`. Wildcard origins (`*`) are strictly blocked.
+Apple iOS requires all browsers (Safari, Chrome, Firefox) to use WebKit. WebKit's Intelligent Tracking Prevention (ITP) blocks third-party cross-site cookies by default.
+- To prevent iOS authentication failures, `vercel.json` provides reverse proxy rewrites mapping `/api/:path*` and `/socket.io/:path*` to the Render backend (`https://roomiematch-f8lz.onrender.com`).
+- Browser requests on `https://roomiematch.vercel.app` stay same-origin (`/api`), and session cookies are stored as first-party host cookies on `roomiematch.vercel.app`.
+- For direct cross-site deployments, `authService` automatically adds the `Partitioned` (CHIPS) attribute whenever `COOKIE_SAME_SITE=none`.
+- When requests return 401 on protected routes, `AuthProvider`'s Axios interceptor automatically synchronizes frontend authentication state with the backend session, clearing stale memory user state and redirecting to `/login`.
 
 ### Same-Site Deployments (Custom Domains)
 

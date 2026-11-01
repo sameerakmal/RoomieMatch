@@ -194,14 +194,20 @@ async function createAcceptedConnection(
   return connId;
 }
 
-function createSocketClient(cookie: string): ClientSocket {
+function createSocketClient(cookie?: string): ClientSocket {
   return ioc(baseUrl, {
-    extraHeaders: {
-      Cookie: cookie,
-      Origin: 'http://localhost:5173',
+    extraHeaders: { Origin: 'http://localhost:5173' },
+    auth: async callback => {
+      try {
+        const response = await request('/auth/socket-ticket', { method: 'POST', body: {}, cookie });
+        const data = await response.json();
+        callback({ ticket: data.ticket });
+      } catch { callback({}); }
     },
     transports: ['websocket'],
     autoConnect: true,
+    reconnection: false,
+    timeout: 5000,
   });
 }
 

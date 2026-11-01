@@ -61,7 +61,8 @@ export function MessagesPage() {
   // Composer & typing state
   const [inputText, setInputText] = useState('');
   const [isTypingRemote, setIsTypingRemote] = useState(false);
-  const [isConnected, setIsConnected] = useState(true);
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -190,9 +191,11 @@ export function MessagesPage() {
   // 4b. Socket.IO Real-Time Event Handlers (registered once per component lifecycle)
   useEffect(() => {
     const socket = getSocket();
+    setIsConnected(socket.connected);
 
     function onConnect() {
       setIsConnected(true);
+      setConnectionError(null);
       const activeId = selectedConversationIdRef.current;
       if (activeId) {
         socket.emit('conversation:join', { conversationId: activeId });
@@ -201,6 +204,13 @@ export function MessagesPage() {
 
     function onDisconnect() {
       setIsConnected(false);
+    }
+
+    function onConnectError() {
+      setIsConnected(false);
+      setConnectionError(socket.active
+        ? 'Unable to connect to chat. Retrying…'
+        : 'Unable to connect to chat. Please sign in again or reload the page.');
     }
 
     function onNewMessage(newMsg: MessageItem) {
@@ -326,6 +336,7 @@ export function MessagesPage() {
 
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
+    socket.on('connect_error', onConnectError);
     socket.on('message:new', onNewMessage);
     socket.on('message:sent', onMessageSent);
     socket.on('message:failed', onMessageFailed);
@@ -335,10 +346,13 @@ export function MessagesPage() {
     socket.on('conversation:updated', onConversationUpdated);
     socket.on('conversation:revoked', onConversationRevoked);
     socket.on('conversation:error', onConversationError);
+    // The shared dashboard socket may have failed before this page mounted.
+    if (!socket.connected && !socket.active) onConnectError();
 
     return () => {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
+      socket.off('connect_error', onConnectError);
       socket.off('message:new', onNewMessage);
       socket.off('message:sent', onMessageSent);
       socket.off('message:failed', onMessageFailed);
@@ -358,6 +372,10 @@ export function MessagesPage() {
     if (!content || !selectedConversationId) return;
 
     const socket = getSocket();
+    if (!socket.connected) {
+      setConnectionError('Chat is not connected. Please wait for the connection before sending.');
+      return;
+    }
     const { message: optimisticMessage, idempotencyKey } = createOptimisticMessage({
       conversationId: selectedConversationId,
       senderId: currentUserId,
@@ -476,7 +494,7 @@ export function MessagesPage() {
       {/* Disconnection Warning */}
       {!isConnected && (
         <div className="form-message form-message-error reconnect-banner" role="alert">
-          <Clock size={16} /> Connection lost. Reconnecting to RoomieMatch real-time chat…
+          <Clock size={16} /> {connectionError || 'Connecting to RoomieMatch real-time chat…'}
         </div>
       )}
 

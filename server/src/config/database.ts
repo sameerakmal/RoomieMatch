@@ -6,6 +6,8 @@ import { Conversation } from '../models/Conversation.js';
 import { Message } from '../models/Message.js';
 import { Notification } from '../models/Notification.js';
 import { RoommatePreferences } from '../models/RoommatePreferences.js';
+import { SocketTicket } from '../models/SocketTicket.js';
+import { RevokedSession } from '../models/RevokedSession.js';
 
 export async function connectDatabase(): Promise<void> {
   mongoose.set('bufferCommands', false);
@@ -32,6 +34,8 @@ export async function connectDatabase(): Promise<void> {
     Message.init(),
     Notification.init(),
     RoommatePreferences.init(),
+    SocketTicket.init(),
+    RevokedSession.init(),
   ]);
 
   console.info('MongoDB connected.');

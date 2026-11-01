@@ -1,5 +1,5 @@
 import bcrypt from 'bcrypt';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import type { CookieOptions, Response } from 'express';
 import { env } from '../config/env.js';
@@ -14,7 +14,7 @@ export const cookieOptions: CookieOptions = { httpOnly: true, secure: env.nodeEn
 export const jwtOptions = { algorithm: 'HS256' as const, issuer: 'roomiematch-api', audience: 'roomiematch-client' };
 
 export function authenticateResponse(response: Response, user: UserDocument): void {
-  const token = jwt.sign({}, env.jwtSecret, { ...jwtOptions, subject: user.id as string, expiresIn: env.jwtExpiresInSeconds });
+  const token = jwt.sign({}, env.jwtSecret, { ...jwtOptions, subject: user.id as string, jwtid: randomBytes(16).toString('hex'), expiresIn: env.jwtExpiresInSeconds });
   response.cookie(authCookieName, token, {
     ...cookieOptions,
     ...(env.cookieSameSite === 'none' ? { partitioned: true } : {}),
@@ -27,7 +27,13 @@ export function clearAuthentication(response: Response): void {
     ...(env.cookieSameSite === 'none' ? { partitioned: true } : {}),
   });
 }
-export function verifyAuthToken(token: unknown): string {
+export interface AuthSession { userId: string; hash: string; expiresAt: Date }
+
+export function sessionCookie(cookies: Record<string, unknown> | undefined): unknown {
+  return cookies?.[authCookieName] ?? cookies?.['__Host-roomiematch_session'] ?? cookies?.['roomiematch_session'];
+}
+
+export function verifyAuthSession(token: unknown): AuthSession {
   if (typeof token !== 'string') throw new Error('Missing token');
   const payload = jwt.verify(token, env.jwtSecret, {
     algorithms: ['HS256'],
@@ -37,7 +43,10 @@ export function verifyAuthToken(token: unknown): string {
   if (typeof payload === 'string' || !payload.sub || !/^[a-f\d]{24}$/i.test(payload.sub) || typeof payload.exp !== 'number') {
     throw new Error('Invalid subject or expiration');
   }
-  return payload.sub;
+  return { userId: payload.sub, hash: createHash('sha256').update(token).digest('hex'), expiresAt: new Date(payload.exp * 1000) };
+}
+export function verifyAuthToken(token: unknown): string {
+  return verifyAuthSession(token).userId;
 }
 export async function registerUser(name: string, email: string, password: string): Promise<UserDocument> {
   if (await User.exists({ email })) throw new HttpError(409, 'An account with this email already exists.', { email: 'This email is already registered. Try logging in.' });

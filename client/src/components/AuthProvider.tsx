@@ -4,12 +4,14 @@ import { AuthContext, type AuthState } from '../hooks/useAuth';
 import { api, apiError } from '../services/api';
 import { authService } from '../services/auth';
 import type { LoginInput, RegisterInput, User } from '../types';
+import { disconnectSocket } from '../services/socket';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [status, setStatus] = useState<AuthState['status']>('loading');
   const [error, setError] = useState('');
   const revision = useRef(0);
+  const sessionChannel = useRef<BroadcastChannel | null>(null);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const requestRevision = ++revision.current;
@@ -21,6 +23,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setError('');
     } catch (cause) {
       if (signal?.aborted || requestRevision !== revision.current) return;
+      disconnectSocket();
       setUser(null);
       if (axios.isAxiosError(cause) && cause.response?.status === 401) {
         setStatus('anonymous');
@@ -40,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const url = cause.config?.url;
         if (!url?.startsWith('/auth/login') && !url?.startsWith('/auth/register')) {
           revision.current++;
+          disconnectSocket();
           setUser(null);
           setStatus('anonymous');
         }
@@ -49,8 +53,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { controller.abort(); api.interceptors.response.eject(interceptor); };
   }, [refresh]);
 
+  useEffect(() => {
+    const restoreSession = () => {
+      disconnectSocket();
+      setStatus('loading');
+      void refresh();
+    };
+    window.addEventListener('roomiematch:session-ended', restoreSession);
+    const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('roomiematch-session') : null;
+    sessionChannel.current = channel;
+    if (channel) channel.onmessage = event => { if (event.data === 'logout') restoreSession(); };
+    return () => {
+      window.removeEventListener('roomiematch:session-ended', restoreSession);
+      channel?.close();
+      sessionChannel.current = null;
+    };
+  }, [refresh]);
+
   async function login(input: LoginInput) {
     const currentUser = await authService.login(input);
+    disconnectSocket();
     revision.current++;
     setUser(currentUser);
     setStatus('authenticated');
@@ -58,6 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
   async function register(input: RegisterInput) {
     const currentUser = await authService.register(input);
+    disconnectSocket();
     revision.current++;
     setUser(currentUser);
     setStatus('authenticated');
@@ -66,6 +89,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function logout() {
     // Keep the local session if the request fails: do not pretend logout worked.
     await authService.logout();
+    disconnectSocket();
+    sessionChannel.current?.postMessage('logout');
     revision.current++;
     setUser(null);
     setStatus('anonymous');

@@ -2,18 +2,21 @@ import type { Server as HTTPServer } from 'node:http';
 import { Server as SocketIOServer, type Socket } from 'socket.io';
 import mongoose from 'mongoose';
 import { env } from '../config/env.js';
-import { authCookieName, verifyAuthToken } from '../services/authService.js';
+import { consumeSocketTicket, sessionIsActive } from '../services/socketTicketService.js';
 import { User, type UserDocument } from '../models/User.js';
 import { Conversation } from '../models/Conversation.js';
 import { Connection } from '../models/Connection.js';
 import { Message } from '../models/Message.js';
 import { presenceManager } from './presenceManager.js';
 import { typingManager } from './typingManager.js';
+import { realtimeDebug } from './diagnostics.js';
 
 interface AuthenticatedSocket extends Socket {
   data: {
     userId: string;
     user: UserDocument;
+    sessionHash: string;
+    sessionExpiresAt: Date;
   };
 }
 
@@ -119,18 +122,6 @@ async function broadcastAuthorizedPresence(
   }
 }
 
-function parseCookies(cookieHeader: string | undefined): Record<string, string> {
-  const result: Record<string, string> = {};
-  if (!cookieHeader) return result;
-  for (const item of cookieHeader.split(';')) {
-    const [rawName, ...rawVal] = item.trim().split('=');
-    if (rawName) {
-      result[rawName.trim()] = decodeURIComponent(rawVal.join('='));
-    }
-  }
-  return result;
-}
-
 export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
   const io = new SocketIOServer(httpServer, {
     cors: {
@@ -141,33 +132,48 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
     maxHttpBufferSize: 1e6, // 1MB buffer limit
   });
 
+  const engineTraces = new WeakMap<object, string>();
+  let engineSequence = 0;
+  io.engine.on('connection', engine => {
+    // A log-only correlation ID, not the private Engine.IO transport session ID.
+    const engineTraceId = `engine-${++engineSequence}`;
+    engineTraces.set(engine, engineTraceId);
+    realtimeDebug('engine:open', { engineTraceId, transport: engine.transport.name });
+    const trace = (direction: string, packet: { type: string; data?: unknown }) => {
+      realtimeDebug('engine:packet', { engineTraceId, direction, type: packet.type,
+        namespaceType: packet.type === 'message' && typeof packet.data === 'string' ? packet.data.charAt(0) : undefined });
+    };
+    engine.on('packet', (packet: { type: string; data?: unknown }) => trace('in', packet));
+    engine.on('packetCreate', (packet: { type: string; data?: unknown }) => trace('out', packet));
+    engine.on('close', (reason: string) => realtimeDebug('engine:close', { engineTraceId, reason }));
+  });
+
   // 1. Authentication Middleware during handshake
   io.use(async (socket, next) => {
+    const reject = (code: string, message: string) => {
+      realtimeDebug('auth:rejected', { socketId: socket.id, reason: code });
+      next(Object.assign(new Error(message), { data: { code } }));
+    };
     try {
-      const cookieHeader = socket.handshake.headers.cookie;
-      const cookies = parseCookies(cookieHeader);
-      const token = cookies[authCookieName] ?? cookies['__Host-roomiematch_session'] ?? cookies['roomiematch_session'];
-
-      if (!token) {
-        return next(new Error('Authentication required: missing session cookie.'));
+      const origin = socket.handshake.headers.origin;
+      if (!origin || !env.clientOrigins.includes(origin)) {
+        return reject('SOCKET_ORIGIN_INVALID', 'Authentication failed: origin is not allowed.');
       }
-
-      const userId = verifyAuthToken(token);
-
       if (mongoose.connection.readyState !== 1) {
-        return next(new Error('Database unavailable.'));
+        return reject('SOCKET_AUTH_UNAVAILABLE', 'Chat authentication is temporarily unavailable.');
       }
-
-      const user = await User.findById(userId);
-      if (!user) {
-        return next(new Error('User account not found.'));
-      }
-
+      const ticket = await consumeSocketTicket(socket.handshake.auth?.ticket, origin);
+      if (!ticket) return reject('SOCKET_TICKET_INVALID', 'Authentication failed: invalid or expired socket ticket.');
+      const user = await User.findById(ticket.userId);
+      if (!user) return reject('SOCKET_SESSION_INVALID', 'Authentication failed: account is unavailable.');
       socket.data.userId = user._id.toString();
       socket.data.user = user;
+      socket.data.sessionHash = ticket.sessionHash;
+      socket.data.sessionExpiresAt = ticket.sessionExpiresAt;
+      realtimeDebug('auth:authenticated', { socketId: socket.id, userId: socket.data.userId, origin });
       next();
     } catch {
-      next(new Error('Authentication failed: invalid or expired session.'));
+      reject('SOCKET_AUTH_UNAVAILABLE', 'Chat authentication is temporarily unavailable.');
     }
   });
 
@@ -175,19 +181,61 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
   io.on('connection', (rawSocket) => {
     const socket = rawSocket as AuthenticatedSocket;
     const userId = socket.data.userId;
+    const trace = (event: string, details: Record<string, unknown> = {}) => realtimeDebug(event, {
+      socketId: socket.id, engineTraceId: engineTraces.get(socket.conn), userId, ...details,
+    });
+    trace('socket:connected', { origin: socket.handshake.headers.origin, transport: socket.conn.transport.name });
 
-    // Join user's individual channel for direct messaging notifications
-    socket.join(`user:${userId}`);
-
-    // Update presence
+    const endSession = () => {
+      if (!socket.connected) return;
+      socket.emit('session:ended');
+      socket.disconnect(true);
+    };
+    const checkSession = async () => {
+      try {
+        const active = await sessionIsActive(socket.data.sessionHash, socket.data.sessionExpiresAt);
+        if (!active) endSession();
+        return active && socket.connected;
+      } catch {
+        // Fail closed on database outages; transport close allows a fresh-ticket retry.
+        socket.conn.close();
+        return false;
+      }
+    };
+    // Join before checking again to close the logout-vs-handshake race. Logout either
+    // disconnects this room or the post-join check observes its durable revocation.
     const becameOnline = presenceManager.addSocket(userId, socket.id);
-    if (becameOnline) {
-      void broadcastAuthorizedPresence(io, userId, true);
-    }
+    if (becameOnline) void broadcastAuthorizedPresence(io, userId, true);
+    const ready = (async () => {
+      await socket.join(`session:${socket.data.sessionHash}`);
+      if (!await checkSession()) return false;
+      await socket.join(`user:${userId}`);
+      if (!socket.connected) return false;
+      return true;
+    })();
+    socket.use((_event, next) => {
+      void (async () => {
+        if (await ready && await checkSession()) next();
+      })();
+    });
+    // Exact expiry timer (chunked for sessions longer than Node's timeout limit).
+    let expiryTimer: ReturnType<typeof setTimeout>;
+    const scheduleExpiry = () => {
+      const remaining = socket.data.sessionExpiresAt.getTime() - Date.now();
+      if (remaining <= 0) { endSession(); return; }
+      expiryTimer = setTimeout(scheduleExpiry, Math.min(remaining, 2_147_483_647));
+      expiryTimer.unref();
+    };
+    // Also observes revocations written by another process; current Render instance
+    // disconnects its session room immediately on logout.
+    const revocationTimer = setInterval(() => { void checkSession(); }, 30_000);
+    revocationTimer.unref();
+    socket.on('disconnect', () => { clearTimeout(expiryTimer); clearInterval(revocationTimer); });
 
     // Client event: join conversation room
     socket.on('conversation:join', async (payload: { conversationId?: string }) => {
       const conversationId = payload?.conversationId;
+      trace('conversation:join', { conversationId: typeof conversationId === 'string' && /^[a-f\d]{24}$/i.test(conversationId) ? conversationId : undefined });
 
       if (!conversationId || !mongoose.Types.ObjectId.isValid(conversationId)) {
         return socket.emit('conversation:error', {
@@ -199,6 +247,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
       try {
         const auth = await verifyActiveConversation(conversationId, userId);
         if (!auth.valid) {
+          trace('conversation:rejected', { conversationId, reason: 'authorization_failed' });
           return socket.emit('conversation:error', {
             conversationId,
             error: auth.error,
@@ -206,6 +255,8 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
         }
 
         socket.join(`conversation:${conversationId}`);
+        trace('conversation:joined', { conversationId, room: `conversation:${conversationId}`,
+          roomSocketCount: io.sockets.adapter.rooms.get(`conversation:${conversationId}`)?.size ?? 0 });
         socket.emit('conversation:joined', { conversationId });
       } catch {
         socket.emit('conversation:error', {
@@ -220,6 +271,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
       const conversationId = payload?.conversationId;
       if (conversationId) {
         socket.leave(`conversation:${conversationId}`);
+        trace('conversation:left', { conversationId: /^[a-f\d]{24}$/i.test(conversationId) ? conversationId : undefined });
       }
     });
 
@@ -242,6 +294,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
         }
 
         const trimmedContent = (content || '').trim();
+        trace('message:received', { conversationId });
         if (!trimmedContent) {
           return socket.emit('message:failed', {
             conversationId,
@@ -267,6 +320,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
         try {
           const auth = await verifyActiveConversation(conversationId, userId);
           if (!auth.valid) {
+            trace('message:rejected', { conversationId, reason: 'authorization_failed' });
             if (auth.error?.includes('no longer accepted')) {
               await revokeConversationRoom(conversationId);
             }
@@ -285,6 +339,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
               idempotencyKey: safeIdempotencyKey,
             });
             if (existing) {
+              trace('message:deduplicated', { conversationId, messageId: existing._id.toString() });
               const formattedExisting = {
                 id: existing._id.toString(),
                 conversationId,
@@ -312,6 +367,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
             readBy: [userObjectId],
             idempotencyKey: safeIdempotencyKey,
           });
+          trace('message:persisted', { conversationId, messageId: message._id.toString() });
 
           // Update conversation lastMessage
           conversation.lastMessage = message._id;
@@ -330,6 +386,13 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
           };
 
           // Broadcast to conversation room
+          if (process.env.REALTIME_DEBUG === 'true') {
+            const room = `conversation:${conversationId}`;
+            const members = io.sockets.adapter.rooms.get(room) ?? new Set<string>();
+            const recipientIds = new Set(conversation.participants.map((id: mongoose.Types.ObjectId) => id.toString()).filter((id: string) => id !== userId));
+            trace('message:broadcast', { conversationId, messageId: message._id.toString(), room,
+              roomSocketCount: members.size, recipientSocketCount: [...members].filter(id => recipientIds.has(io.sockets.sockets.get(id)?.data.userId)).length });
+          }
           io.to(`conversation:${conversationId}`).emit('message:new', formattedMessage);
 
           // Return acknowledgment to sender
@@ -337,6 +400,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
             message: formattedMessage,
             idempotencyKey: safeIdempotencyKey,
           });
+          trace('message:acknowledged', { conversationId, messageId: message._id.toString() });
 
           // Notify all participants so their conversation list updates in real-time
           for (const participantId of conversation.participants) {
@@ -346,6 +410,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
             });
           }
         } catch (err: any) {
+          trace('message:error', { conversationId, reason: err.code === 11000 ? 'duplicate_key' : 'persistence_or_delivery_failed' });
           if (err.code === 11000 && safeIdempotencyKey) {
             // Handled duplicate key safely
             const existing = await Message.findOne({
@@ -486,12 +551,15 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
     });
 
     // Disconnect handling: update presence and broadcast offline to authorized connections
-    socket.on('disconnect', () => {
+    socket.on('disconnect', reason => {
+      trace('socket:disconnected', { reason });
       const becameOffline = presenceManager.removeSocket(userId, socket.id);
       if (becameOffline) {
         void broadcastAuthorizedPresence(io, userId, false);
       }
     });
+    // Register cleanup first: a session can expire between middleware and connection.
+    scheduleExpiry();
   });
 
   ioInstance = io;

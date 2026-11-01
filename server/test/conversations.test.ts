@@ -196,7 +196,14 @@ async function createAcceptedConnection(userA: { cookie: string; user: { id: str
 
 function createSocketClient(cookie?: string): ClientSocket {
   return ioc(baseUrl, {
-    extraHeaders: cookie ? { Cookie: cookie } : undefined,
+    extraHeaders: { Origin: 'http://localhost:5173' },
+    auth: async callback => {
+      try {
+        const response = await request('/auth/socket-ticket', { method: 'POST', body: {}, cookie });
+        const data = await response.json();
+        callback({ ticket: data.ticket });
+      } catch { callback({}); }
+    },
     transports: ['websocket'],
     autoConnect: true,
     reconnection: false,

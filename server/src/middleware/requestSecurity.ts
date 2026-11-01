@@ -21,3 +21,13 @@ export const authRateLimit = rateLimit({
   skipSuccessfulRequests: true,
   handler: (_request, _response, next) => next(new HttpError(429, 'Too many attempts. Please try again in 15 minutes.')),
 });
+
+export const socketTicketIpLimit = rateLimit({
+  windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false,
+  handler: (_request, _response, next) => next(new HttpError(429, 'Too many chat connection attempts. Please try again shortly.')),
+});
+export const socketTicketUserLimit = rateLimit({
+  windowMs: 60_000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false,
+  keyGenerator: request => request.user!._id.toString(),
+  handler: (_request, _response, next) => next(new HttpError(429, 'Too many chat connection attempts. Please try again shortly.')),
+});

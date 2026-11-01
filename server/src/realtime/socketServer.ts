@@ -293,6 +293,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
                 messageType: existing.messageType,
                 readBy: existing.readBy.map((id) => id.toString()),
                 createdAt: existing.createdAt.toISOString(),
+                idempotencyKey: existing.idempotencyKey || undefined,
               };
               return socket.emit('message:sent', {
                 message: formattedExisting,
@@ -325,6 +326,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
             messageType: message.messageType,
             readBy: [userId],
             createdAt: message.createdAt.toISOString(),
+            idempotencyKey: message.idempotencyKey || undefined,
           };
 
           // Broadcast to conversation room
@@ -360,6 +362,7 @@ export function initSocketServer(httpServer: HTTPServer): SocketIOServer {
                   messageType: existing.messageType,
                   readBy: existing.readBy.map((id) => id.toString()),
                   createdAt: existing.createdAt.toISOString(),
+                  idempotencyKey: existing.idempotencyKey || undefined,
                 },
                 idempotencyKey: safeIdempotencyKey,
               });

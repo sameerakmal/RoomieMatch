@@ -8,6 +8,12 @@ import type { AddressInfo } from 'node:net';
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server-core';
 import { io as ioc, type Socket as ClientSocket } from 'socket.io-client';
+import {
+  createOptimisticMessage,
+  reconcileMessage,
+  reconcileFailedMessage,
+  mergeOlderMessages,
+} from '../../client/src/utils/messageDeduplication.js';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = randomBytes(48).toString('hex');
@@ -1057,6 +1063,343 @@ test('Regression: Connection revocation purges existing room memberships and blo
   clientB.disconnect();
 });
 
+test('Regression: Message deduplication lifecycle - sender sends message, receives ack and broadcast in any order, exactly one message bubble exists', () => {
+  const currentUserId = 'user_sender_123';
+  const conversationId = 'conv_abc_456';
+  const content = 'hii';
+
+  // 1. User clicks send: optimistic message created
+  const { message: opt1, idempotencyKey: key1 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content,
+  });
+
+  assert.equal(opt1.pending, true);
+  assert.equal(opt1.idempotencyKey, key1);
+
+  let senderMessages = [opt1];
+  assert.equal(senderMessages.length, 1);
+
+  // Server canonical representation
+  const canonical1 = {
+    id: 'mongo_msg_001',
+    conversationId,
+    senderId: currentUserId,
+    content,
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: new Date().toISOString(),
+    idempotencyKey: key1,
+  };
+
+  // Order A: message:new arrives first, then message:sent arrives
+  senderMessages = reconcileMessage(senderMessages, canonical1);
+  assert.equal(senderMessages.length, 1, 'Broadcast should replace optimistic placeholder in place');
+  assert.equal(senderMessages[0].id, 'mongo_msg_001', 'ID must be updated to canonical MongoDB ID');
+  assert.equal(senderMessages[0].pending, false, 'Pending state must be cleared');
+
+  // Now message:sent arrives with the same canonical ID and idempotency key
+  senderMessages = reconcileMessage(senderMessages, canonical1, key1);
+  assert.equal(senderMessages.length, 1, 'Acknowledgement must not append a duplicate message');
+  assert.equal(senderMessages[0].id, 'mongo_msg_001');
+
+  // Order B: Repeat test with message:sent arriving before message:new
+  const { message: opt2, idempotencyKey: key2 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content: 'what are you doing',
+  });
+  let senderMessagesB = [opt2];
+
+  const canonical2 = {
+    id: 'mongo_msg_002',
+    conversationId,
+    senderId: currentUserId,
+    content: 'what are you doing',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: new Date().toISOString(),
+    idempotencyKey: key2,
+  };
+
+  // Sent ack arrives first
+  senderMessagesB = reconcileMessage(senderMessagesB, canonical2, key2);
+  assert.equal(senderMessagesB.length, 1, 'Sent ack should replace optimistic placeholder');
+  assert.equal(senderMessagesB[0].id, 'mongo_msg_002');
+  assert.equal(senderMessagesB[0].pending, false);
+
+  // Broadcast arrives second
+  senderMessagesB = reconcileMessage(senderMessagesB, canonical2);
+  assert.equal(senderMessagesB.length, 1, 'Subsequent broadcast must not duplicate message');
+  assert.equal(senderMessagesB[0].id, 'mongo_msg_002');
+
+  // Recipient receives message:new
+  let recipientMessages: typeof senderMessages = [];
+  recipientMessages = reconcileMessage(recipientMessages, canonical1);
+  assert.equal(recipientMessages.length, 1, 'Recipient receives exactly one message');
+  assert.equal(recipientMessages[0].id, 'mongo_msg_001');
+
+  // If duplicate broadcast arrives for recipient, ignore duplicate
+  recipientMessages = reconcileMessage(recipientMessages, canonical1);
+  assert.equal(recipientMessages.length, 1, 'Recipient ignores duplicate socket broadcast');
+});
+
+test('Regression: Two identical message texts sent separately both appear with distinct IDs', () => {
+  const currentUserId = 'user_sender_123';
+  const conversationId = 'conv_abc_456';
+
+  let messages: any[] = [];
+
+  // Send first "hii"
+  const { message: opt1, idempotencyKey: key1 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+  });
+  messages = [...messages, opt1];
+
+  const srv1 = {
+    id: 'mongo_msg_101',
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: '2026-11-01T13:26:00.000Z',
+    idempotencyKey: key1,
+  };
+  messages = reconcileMessage(messages, srv1, key1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].id, 'mongo_msg_101');
+
+  // Send second "hii" (identical text)
+  const { message: opt2, idempotencyKey: key2 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+  });
+  messages = [...messages, opt2];
+  assert.equal(messages.length, 2);
+
+  const srv2 = {
+    id: 'mongo_msg_102',
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: '2026-11-01T13:26:05.000Z',
+    idempotencyKey: key2,
+  };
+  messages = reconcileMessage(messages, srv2, key2);
+
+  // Both messages must appear distinctly, without clobbering each other
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].id, 'mongo_msg_101');
+  assert.equal(messages[1].id, 'mongo_msg_102');
+  assert.equal(messages[0].content, 'hii');
+  assert.equal(messages[1].content, 'hii');
+});
+
+test('Regression: Retrying the same idempotency key reconciles without creating duplicate messages', () => {
+  const currentUserId = 'user_sender_123';
+  const conversationId = 'conv_abc_456';
+  const key = 'idemp_key_fixed_123';
+
+  const canonical = {
+    id: 'mongo_msg_existing',
+    conversationId,
+    senderId: currentUserId,
+    content: 'Retryable message',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: new Date().toISOString(),
+    idempotencyKey: key,
+  };
+
+  let messages = [canonical];
+
+  // Simulating duplicate retry response from server with same idempotency key and ID
+  messages = reconcileMessage(messages, canonical, key);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].id, 'mongo_msg_existing');
+});
+
+test('Regression: Pagination mergeOlderMessages prevents duplicate messages when history overlaps', () => {
+  const current = [
+    {
+      id: 'msg_2',
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'Second',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:01:00.000Z',
+    },
+    {
+      id: 'msg_3',
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'Third',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:02:00.000Z',
+    },
+  ];
+
+  const olderPage = [
+    {
+      id: 'msg_1',
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'First',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:00:00.000Z',
+    },
+    {
+      id: 'msg_2', // Overlaps with current
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'Second',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:01:00.000Z',
+    },
+  ];
+
+  const merged = mergeOlderMessages(current, olderPage);
+  assert.equal(merged.length, 3);
+  assert.deepEqual(
+    merged.map((m) => m.id),
+    ['msg_1', 'msg_2', 'msg_3'],
+  );
+});
+
+test('Regression: Switching conversations isolates room events and cleans up stale socket handlers', async () => {
+  const userA = await createCompletedUser('Switch User A', 'switch_a@test.com');
+  const userB = await createCompletedUser('Switch User B', 'switch_b@test.com');
+  const userC = await createCompletedUser('Switch User C', 'switch_c@test.com');
+
+  const connABId = await createAcceptedConnection(userA, userB);
+  const connACId = await createAcceptedConnection(userA, userC);
+
+  const convABRes = await request(`/conversations/${connABId}`, {
+    method: 'POST',
+    cookie: userA.cookie,
+  });
+  const convABId = (await convABRes.json()).conversation.id;
+
+  const convACRes = await request(`/conversations/${connACId}`, {
+    method: 'POST',
+    cookie: userA.cookie,
+  });
+  const convACId = (await convACRes.json()).conversation.id;
+
+  const clientA = createSocketClient(userA.cookie);
+  const clientB = createSocketClient(userB.cookie);
+  await Promise.all([
+    new Promise<void>((r) => clientA.on('connect', r)),
+    new Promise<void>((r) => clientB.on('connect', r)),
+  ]);
+
+  // Client A initially joins Conversation AB
+  clientA.emit('conversation:join', { conversationId: convABId });
+  await new Promise<void>((r) => clientA.once('conversation:joined', () => r()));
+
+  // Client A switches to Conversation AC: leaves AB and joins AC
+  clientA.emit('conversation:leave', { conversationId: convABId });
+  clientA.emit('conversation:join', { conversationId: convACId });
+  await new Promise<void>((r) => clientA.once('conversation:joined', () => r()));
+
+  // Client B joins AB and sends a message to AB
+  clientB.emit('conversation:join', { conversationId: convABId });
+  await new Promise<void>((r) => clientB.once('conversation:joined', () => r()));
+
+  let clientAReceivedMsgInAB = false;
+  clientA.on('message:new', (msg) => {
+    if (msg.conversationId === convABId) {
+      clientAReceivedMsgInAB = true;
+    }
+  });
+
+  clientB.emit('message:send', {
+    conversationId: convABId,
+    content: 'Message inside AB',
+    idempotencyKey: 'switch_test_1',
+  });
+
+  await new Promise((r) => setTimeout(r, 250));
+  // Client A is no longer in AB room, so client A should NOT receive message:new in AB
+  assert.equal(clientAReceivedMsgInAB, false, 'Client A should not receive room events for left conversation');
+
+  clientA.disconnect();
+  clientB.disconnect();
+});
+
+test('Regression: Real-time Socket.IO broadcast and REST history always include idempotencyKey', async () => {
+  const userA = await createCompletedUser('Idemp User A', 'idemp_a@test.com');
+  const userB = await createCompletedUser('Idemp User B', 'idemp_b@test.com');
+  const connId = await createAcceptedConnection(userA, userB);
+
+  const convRes = await request(`/conversations/${connId}`, {
+    method: 'POST',
+    cookie: userA.cookie,
+  });
+  const convId = (await convRes.json()).conversation.id;
+
+  const clientA = createSocketClient(userA.cookie);
+  const clientB = createSocketClient(userB.cookie);
+  await Promise.all([
+    new Promise<void>((r) => clientA.on('connect', r)),
+    new Promise<void>((r) => clientB.on('connect', r)),
+  ]);
+
+  clientA.emit('conversation:join', { conversationId: convId });
+  clientB.emit('conversation:join', { conversationId: convId });
+  await Promise.all([
+    new Promise<void>((r) => clientA.once('conversation:joined', () => r())),
+    new Promise<void>((r) => clientB.once('conversation:joined', () => r())),
+  ]);
+
+  const testKey = 'unique_idemp_key_999';
+
+  let ackReceivedKey: string | undefined;
+  let broadcastReceivedKey: string | undefined;
+
+  clientA.on('message:sent', (ack) => {
+    ackReceivedKey = ack.message.idempotencyKey;
+  });
+
+  clientB.on('message:new', (msg) => {
+    broadcastReceivedKey = msg.idempotencyKey;
+  });
+
+  clientA.emit('message:send', {
+    conversationId: convId,
+    content: 'Checking idempotency key preservation',
+    idempotencyKey: testKey,
+  });
+
+  await new Promise((r) => setTimeout(r, 300));
+
+  assert.equal(ackReceivedKey, testKey, 'message:sent payload.message must include idempotencyKey');
+  assert.equal(broadcastReceivedKey, testKey, 'message:new broadcast must include idempotencyKey');
+
+  // Verify REST history also includes idempotencyKey
+  const historyRes = await request(`/conversations/${convId}/messages`, {
+    cookie: userA.cookie,
+  });
+  assert.equal(historyRes.status, 200);
+  const historyData = await historyRes.json();
+  assert.equal(historyData.messages.length, 1);
+  assert.equal(historyData.messages[0].idempotencyKey, testKey, 'REST messages must include idempotencyKey');
+
+  clientA.disconnect();
+  clientB.disconnect();
+});
+
 test('Integration: Rejecting or cancelling a pending request does not revoke an unrelated accepted conversation', async () => {
   // User A and User B have an accepted connection and active conversation
   const userA = await createCompletedUser('Isolated User A', 'isolated_a@test.com');
@@ -1136,6 +1479,343 @@ test('Integration: Rejecting or cancelling a pending request does not revoke an 
   clientB.disconnect();
 });
 
+test('Regression: Message deduplication lifecycle - sender sends message, receives ack and broadcast in any order, exactly one message bubble exists', () => {
+  const currentUserId = 'user_sender_123';
+  const conversationId = 'conv_abc_456';
+  const content = 'hii';
+
+  // 1. User clicks send: optimistic message created
+  const { message: opt1, idempotencyKey: key1 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content,
+  });
+
+  assert.equal(opt1.pending, true);
+  assert.equal(opt1.idempotencyKey, key1);
+
+  let senderMessages = [opt1];
+  assert.equal(senderMessages.length, 1);
+
+  // Server canonical representation
+  const canonical1 = {
+    id: 'mongo_msg_001',
+    conversationId,
+    senderId: currentUserId,
+    content,
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: new Date().toISOString(),
+    idempotencyKey: key1,
+  };
+
+  // Order A: message:new arrives first, then message:sent arrives
+  senderMessages = reconcileMessage(senderMessages, canonical1);
+  assert.equal(senderMessages.length, 1, 'Broadcast should replace optimistic placeholder in place');
+  assert.equal(senderMessages[0].id, 'mongo_msg_001', 'ID must be updated to canonical MongoDB ID');
+  assert.equal(senderMessages[0].pending, false, 'Pending state must be cleared');
+
+  // Now message:sent arrives with the same canonical ID and idempotency key
+  senderMessages = reconcileMessage(senderMessages, canonical1, key1);
+  assert.equal(senderMessages.length, 1, 'Acknowledgement must not append a duplicate message');
+  assert.equal(senderMessages[0].id, 'mongo_msg_001');
+
+  // Order B: Repeat test with message:sent arriving before message:new
+  const { message: opt2, idempotencyKey: key2 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content: 'what are you doing',
+  });
+  let senderMessagesB = [opt2];
+
+  const canonical2 = {
+    id: 'mongo_msg_002',
+    conversationId,
+    senderId: currentUserId,
+    content: 'what are you doing',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: new Date().toISOString(),
+    idempotencyKey: key2,
+  };
+
+  // Sent ack arrives first
+  senderMessagesB = reconcileMessage(senderMessagesB, canonical2, key2);
+  assert.equal(senderMessagesB.length, 1, 'Sent ack should replace optimistic placeholder');
+  assert.equal(senderMessagesB[0].id, 'mongo_msg_002');
+  assert.equal(senderMessagesB[0].pending, false);
+
+  // Broadcast arrives second
+  senderMessagesB = reconcileMessage(senderMessagesB, canonical2);
+  assert.equal(senderMessagesB.length, 1, 'Subsequent broadcast must not duplicate message');
+  assert.equal(senderMessagesB[0].id, 'mongo_msg_002');
+
+  // Recipient receives message:new
+  let recipientMessages: typeof senderMessages = [];
+  recipientMessages = reconcileMessage(recipientMessages, canonical1);
+  assert.equal(recipientMessages.length, 1, 'Recipient receives exactly one message');
+  assert.equal(recipientMessages[0].id, 'mongo_msg_001');
+
+  // If duplicate broadcast arrives for recipient, ignore duplicate
+  recipientMessages = reconcileMessage(recipientMessages, canonical1);
+  assert.equal(recipientMessages.length, 1, 'Recipient ignores duplicate socket broadcast');
+});
+
+test('Regression: Two identical message texts sent separately both appear with distinct IDs', () => {
+  const currentUserId = 'user_sender_123';
+  const conversationId = 'conv_abc_456';
+
+  let messages: any[] = [];
+
+  // Send first "hii"
+  const { message: opt1, idempotencyKey: key1 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+  });
+  messages = [...messages, opt1];
+
+  const srv1 = {
+    id: 'mongo_msg_101',
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: '2026-11-01T13:26:00.000Z',
+    idempotencyKey: key1,
+  };
+  messages = reconcileMessage(messages, srv1, key1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].id, 'mongo_msg_101');
+
+  // Send second "hii" (identical text)
+  const { message: opt2, idempotencyKey: key2 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+  });
+  messages = [...messages, opt2];
+  assert.equal(messages.length, 2);
+
+  const srv2 = {
+    id: 'mongo_msg_102',
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: '2026-11-01T13:26:05.000Z',
+    idempotencyKey: key2,
+  };
+  messages = reconcileMessage(messages, srv2, key2);
+
+  // Both messages must appear distinctly, without clobbering each other
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].id, 'mongo_msg_101');
+  assert.equal(messages[1].id, 'mongo_msg_102');
+  assert.equal(messages[0].content, 'hii');
+  assert.equal(messages[1].content, 'hii');
+});
+
+test('Regression: Retrying the same idempotency key reconciles without creating duplicate messages', () => {
+  const currentUserId = 'user_sender_123';
+  const conversationId = 'conv_abc_456';
+  const key = 'idemp_key_fixed_123';
+
+  const canonical = {
+    id: 'mongo_msg_existing',
+    conversationId,
+    senderId: currentUserId,
+    content: 'Retryable message',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: new Date().toISOString(),
+    idempotencyKey: key,
+  };
+
+  let messages = [canonical];
+
+  // Simulating duplicate retry response from server with same idempotency key and ID
+  messages = reconcileMessage(messages, canonical, key);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].id, 'mongo_msg_existing');
+});
+
+test('Regression: Pagination mergeOlderMessages prevents duplicate messages when history overlaps', () => {
+  const current = [
+    {
+      id: 'msg_2',
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'Second',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:01:00.000Z',
+    },
+    {
+      id: 'msg_3',
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'Third',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:02:00.000Z',
+    },
+  ];
+
+  const olderPage = [
+    {
+      id: 'msg_1',
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'First',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:00:00.000Z',
+    },
+    {
+      id: 'msg_2', // Overlaps with current
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'Second',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:01:00.000Z',
+    },
+  ];
+
+  const merged = mergeOlderMessages(current, olderPage);
+  assert.equal(merged.length, 3);
+  assert.deepEqual(
+    merged.map((m) => m.id),
+    ['msg_1', 'msg_2', 'msg_3'],
+  );
+});
+
+test('Regression: Switching conversations isolates room events and cleans up stale socket handlers', async () => {
+  const userA = await createCompletedUser('Switch User A', 'switch_a@test.com');
+  const userB = await createCompletedUser('Switch User B', 'switch_b@test.com');
+  const userC = await createCompletedUser('Switch User C', 'switch_c@test.com');
+
+  const connABId = await createAcceptedConnection(userA, userB);
+  const connACId = await createAcceptedConnection(userA, userC);
+
+  const convABRes = await request(`/conversations/${connABId}`, {
+    method: 'POST',
+    cookie: userA.cookie,
+  });
+  const convABId = (await convABRes.json()).conversation.id;
+
+  const convACRes = await request(`/conversations/${connACId}`, {
+    method: 'POST',
+    cookie: userA.cookie,
+  });
+  const convACId = (await convACRes.json()).conversation.id;
+
+  const clientA = createSocketClient(userA.cookie);
+  const clientB = createSocketClient(userB.cookie);
+  await Promise.all([
+    new Promise<void>((r) => clientA.on('connect', r)),
+    new Promise<void>((r) => clientB.on('connect', r)),
+  ]);
+
+  // Client A initially joins Conversation AB
+  clientA.emit('conversation:join', { conversationId: convABId });
+  await new Promise<void>((r) => clientA.once('conversation:joined', () => r()));
+
+  // Client A switches to Conversation AC: leaves AB and joins AC
+  clientA.emit('conversation:leave', { conversationId: convABId });
+  clientA.emit('conversation:join', { conversationId: convACId });
+  await new Promise<void>((r) => clientA.once('conversation:joined', () => r()));
+
+  // Client B joins AB and sends a message to AB
+  clientB.emit('conversation:join', { conversationId: convABId });
+  await new Promise<void>((r) => clientB.once('conversation:joined', () => r()));
+
+  let clientAReceivedMsgInAB = false;
+  clientA.on('message:new', (msg) => {
+    if (msg.conversationId === convABId) {
+      clientAReceivedMsgInAB = true;
+    }
+  });
+
+  clientB.emit('message:send', {
+    conversationId: convABId,
+    content: 'Message inside AB',
+    idempotencyKey: 'switch_test_1',
+  });
+
+  await new Promise((r) => setTimeout(r, 250));
+  // Client A is no longer in AB room, so client A should NOT receive message:new in AB
+  assert.equal(clientAReceivedMsgInAB, false, 'Client A should not receive room events for left conversation');
+
+  clientA.disconnect();
+  clientB.disconnect();
+});
+
+test('Regression: Real-time Socket.IO broadcast and REST history always include idempotencyKey', async () => {
+  const userA = await createCompletedUser('Idemp User A', 'idemp_a@test.com');
+  const userB = await createCompletedUser('Idemp User B', 'idemp_b@test.com');
+  const connId = await createAcceptedConnection(userA, userB);
+
+  const convRes = await request(`/conversations/${connId}`, {
+    method: 'POST',
+    cookie: userA.cookie,
+  });
+  const convId = (await convRes.json()).conversation.id;
+
+  const clientA = createSocketClient(userA.cookie);
+  const clientB = createSocketClient(userB.cookie);
+  await Promise.all([
+    new Promise<void>((r) => clientA.on('connect', r)),
+    new Promise<void>((r) => clientB.on('connect', r)),
+  ]);
+
+  clientA.emit('conversation:join', { conversationId: convId });
+  clientB.emit('conversation:join', { conversationId: convId });
+  await Promise.all([
+    new Promise<void>((r) => clientA.once('conversation:joined', () => r())),
+    new Promise<void>((r) => clientB.once('conversation:joined', () => r())),
+  ]);
+
+  const testKey = 'unique_idemp_key_999';
+
+  let ackReceivedKey: string | undefined;
+  let broadcastReceivedKey: string | undefined;
+
+  clientA.on('message:sent', (ack) => {
+    ackReceivedKey = ack.message.idempotencyKey;
+  });
+
+  clientB.on('message:new', (msg) => {
+    broadcastReceivedKey = msg.idempotencyKey;
+  });
+
+  clientA.emit('message:send', {
+    conversationId: convId,
+    content: 'Checking idempotency key preservation',
+    idempotencyKey: testKey,
+  });
+
+  await new Promise((r) => setTimeout(r, 300));
+
+  assert.equal(ackReceivedKey, testKey, 'message:sent payload.message must include idempotencyKey');
+  assert.equal(broadcastReceivedKey, testKey, 'message:new broadcast must include idempotencyKey');
+
+  // Verify REST history also includes idempotencyKey
+  const historyRes = await request(`/conversations/${convId}/messages`, {
+    cookie: userA.cookie,
+  });
+  assert.equal(historyRes.status, 200);
+  const historyData = await historyRes.json();
+  assert.equal(historyData.messages.length, 1);
+  assert.equal(historyData.messages[0].idempotencyKey, testKey, 'REST messages must include idempotencyKey');
+
+  clientA.disconnect();
+  clientB.disconnect();
+});
+
 test('Integration: Database failure during revocation does not produce misleading revocation notifications', async () => {
   const userA = await createCompletedUser('DbFail User A', 'dbfail_a@test.com');
   const userB = await createCompletedUser('DbFail User B', 'dbfail_b@test.com');
@@ -1190,6 +1870,343 @@ test('Integration: Database failure during revocation does not produce misleadin
   } finally {
     Connection.prototype.save = originalSave;
   }
+
+  clientA.disconnect();
+  clientB.disconnect();
+});
+
+test('Regression: Message deduplication lifecycle - sender sends message, receives ack and broadcast in any order, exactly one message bubble exists', () => {
+  const currentUserId = 'user_sender_123';
+  const conversationId = 'conv_abc_456';
+  const content = 'hii';
+
+  // 1. User clicks send: optimistic message created
+  const { message: opt1, idempotencyKey: key1 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content,
+  });
+
+  assert.equal(opt1.pending, true);
+  assert.equal(opt1.idempotencyKey, key1);
+
+  let senderMessages = [opt1];
+  assert.equal(senderMessages.length, 1);
+
+  // Server canonical representation
+  const canonical1 = {
+    id: 'mongo_msg_001',
+    conversationId,
+    senderId: currentUserId,
+    content,
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: new Date().toISOString(),
+    idempotencyKey: key1,
+  };
+
+  // Order A: message:new arrives first, then message:sent arrives
+  senderMessages = reconcileMessage(senderMessages, canonical1);
+  assert.equal(senderMessages.length, 1, 'Broadcast should replace optimistic placeholder in place');
+  assert.equal(senderMessages[0].id, 'mongo_msg_001', 'ID must be updated to canonical MongoDB ID');
+  assert.equal(senderMessages[0].pending, false, 'Pending state must be cleared');
+
+  // Now message:sent arrives with the same canonical ID and idempotency key
+  senderMessages = reconcileMessage(senderMessages, canonical1, key1);
+  assert.equal(senderMessages.length, 1, 'Acknowledgement must not append a duplicate message');
+  assert.equal(senderMessages[0].id, 'mongo_msg_001');
+
+  // Order B: Repeat test with message:sent arriving before message:new
+  const { message: opt2, idempotencyKey: key2 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content: 'what are you doing',
+  });
+  let senderMessagesB = [opt2];
+
+  const canonical2 = {
+    id: 'mongo_msg_002',
+    conversationId,
+    senderId: currentUserId,
+    content: 'what are you doing',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: new Date().toISOString(),
+    idempotencyKey: key2,
+  };
+
+  // Sent ack arrives first
+  senderMessagesB = reconcileMessage(senderMessagesB, canonical2, key2);
+  assert.equal(senderMessagesB.length, 1, 'Sent ack should replace optimistic placeholder');
+  assert.equal(senderMessagesB[0].id, 'mongo_msg_002');
+  assert.equal(senderMessagesB[0].pending, false);
+
+  // Broadcast arrives second
+  senderMessagesB = reconcileMessage(senderMessagesB, canonical2);
+  assert.equal(senderMessagesB.length, 1, 'Subsequent broadcast must not duplicate message');
+  assert.equal(senderMessagesB[0].id, 'mongo_msg_002');
+
+  // Recipient receives message:new
+  let recipientMessages: typeof senderMessages = [];
+  recipientMessages = reconcileMessage(recipientMessages, canonical1);
+  assert.equal(recipientMessages.length, 1, 'Recipient receives exactly one message');
+  assert.equal(recipientMessages[0].id, 'mongo_msg_001');
+
+  // If duplicate broadcast arrives for recipient, ignore duplicate
+  recipientMessages = reconcileMessage(recipientMessages, canonical1);
+  assert.equal(recipientMessages.length, 1, 'Recipient ignores duplicate socket broadcast');
+});
+
+test('Regression: Two identical message texts sent separately both appear with distinct IDs', () => {
+  const currentUserId = 'user_sender_123';
+  const conversationId = 'conv_abc_456';
+
+  let messages: any[] = [];
+
+  // Send first "hii"
+  const { message: opt1, idempotencyKey: key1 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+  });
+  messages = [...messages, opt1];
+
+  const srv1 = {
+    id: 'mongo_msg_101',
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: '2026-11-01T13:26:00.000Z',
+    idempotencyKey: key1,
+  };
+  messages = reconcileMessage(messages, srv1, key1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].id, 'mongo_msg_101');
+
+  // Send second "hii" (identical text)
+  const { message: opt2, idempotencyKey: key2 } = createOptimisticMessage({
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+  });
+  messages = [...messages, opt2];
+  assert.equal(messages.length, 2);
+
+  const srv2 = {
+    id: 'mongo_msg_102',
+    conversationId,
+    senderId: currentUserId,
+    content: 'hii',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: '2026-11-01T13:26:05.000Z',
+    idempotencyKey: key2,
+  };
+  messages = reconcileMessage(messages, srv2, key2);
+
+  // Both messages must appear distinctly, without clobbering each other
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].id, 'mongo_msg_101');
+  assert.equal(messages[1].id, 'mongo_msg_102');
+  assert.equal(messages[0].content, 'hii');
+  assert.equal(messages[1].content, 'hii');
+});
+
+test('Regression: Retrying the same idempotency key reconciles without creating duplicate messages', () => {
+  const currentUserId = 'user_sender_123';
+  const conversationId = 'conv_abc_456';
+  const key = 'idemp_key_fixed_123';
+
+  const canonical = {
+    id: 'mongo_msg_existing',
+    conversationId,
+    senderId: currentUserId,
+    content: 'Retryable message',
+    messageType: 'text' as const,
+    readBy: [currentUserId],
+    createdAt: new Date().toISOString(),
+    idempotencyKey: key,
+  };
+
+  let messages = [canonical];
+
+  // Simulating duplicate retry response from server with same idempotency key and ID
+  messages = reconcileMessage(messages, canonical, key);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].id, 'mongo_msg_existing');
+});
+
+test('Regression: Pagination mergeOlderMessages prevents duplicate messages when history overlaps', () => {
+  const current = [
+    {
+      id: 'msg_2',
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'Second',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:01:00.000Z',
+    },
+    {
+      id: 'msg_3',
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'Third',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:02:00.000Z',
+    },
+  ];
+
+  const olderPage = [
+    {
+      id: 'msg_1',
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'First',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:00:00.000Z',
+    },
+    {
+      id: 'msg_2', // Overlaps with current
+      conversationId: 'c1',
+      senderId: 'u1',
+      content: 'Second',
+      messageType: 'text' as const,
+      readBy: ['u1'],
+      createdAt: '2026-11-01T10:01:00.000Z',
+    },
+  ];
+
+  const merged = mergeOlderMessages(current, olderPage);
+  assert.equal(merged.length, 3);
+  assert.deepEqual(
+    merged.map((m) => m.id),
+    ['msg_1', 'msg_2', 'msg_3'],
+  );
+});
+
+test('Regression: Switching conversations isolates room events and cleans up stale socket handlers', async () => {
+  const userA = await createCompletedUser('Switch User A', 'switch_a@test.com');
+  const userB = await createCompletedUser('Switch User B', 'switch_b@test.com');
+  const userC = await createCompletedUser('Switch User C', 'switch_c@test.com');
+
+  const connABId = await createAcceptedConnection(userA, userB);
+  const connACId = await createAcceptedConnection(userA, userC);
+
+  const convABRes = await request(`/conversations/${connABId}`, {
+    method: 'POST',
+    cookie: userA.cookie,
+  });
+  const convABId = (await convABRes.json()).conversation.id;
+
+  const convACRes = await request(`/conversations/${connACId}`, {
+    method: 'POST',
+    cookie: userA.cookie,
+  });
+  const convACId = (await convACRes.json()).conversation.id;
+
+  const clientA = createSocketClient(userA.cookie);
+  const clientB = createSocketClient(userB.cookie);
+  await Promise.all([
+    new Promise<void>((r) => clientA.on('connect', r)),
+    new Promise<void>((r) => clientB.on('connect', r)),
+  ]);
+
+  // Client A initially joins Conversation AB
+  clientA.emit('conversation:join', { conversationId: convABId });
+  await new Promise<void>((r) => clientA.once('conversation:joined', () => r()));
+
+  // Client A switches to Conversation AC: leaves AB and joins AC
+  clientA.emit('conversation:leave', { conversationId: convABId });
+  clientA.emit('conversation:join', { conversationId: convACId });
+  await new Promise<void>((r) => clientA.once('conversation:joined', () => r()));
+
+  // Client B joins AB and sends a message to AB
+  clientB.emit('conversation:join', { conversationId: convABId });
+  await new Promise<void>((r) => clientB.once('conversation:joined', () => r()));
+
+  let clientAReceivedMsgInAB = false;
+  clientA.on('message:new', (msg) => {
+    if (msg.conversationId === convABId) {
+      clientAReceivedMsgInAB = true;
+    }
+  });
+
+  clientB.emit('message:send', {
+    conversationId: convABId,
+    content: 'Message inside AB',
+    idempotencyKey: 'switch_test_1',
+  });
+
+  await new Promise((r) => setTimeout(r, 250));
+  // Client A is no longer in AB room, so client A should NOT receive message:new in AB
+  assert.equal(clientAReceivedMsgInAB, false, 'Client A should not receive room events for left conversation');
+
+  clientA.disconnect();
+  clientB.disconnect();
+});
+
+test('Regression: Real-time Socket.IO broadcast and REST history always include idempotencyKey', async () => {
+  const userA = await createCompletedUser('Idemp User A', 'idemp_a@test.com');
+  const userB = await createCompletedUser('Idemp User B', 'idemp_b@test.com');
+  const connId = await createAcceptedConnection(userA, userB);
+
+  const convRes = await request(`/conversations/${connId}`, {
+    method: 'POST',
+    cookie: userA.cookie,
+  });
+  const convId = (await convRes.json()).conversation.id;
+
+  const clientA = createSocketClient(userA.cookie);
+  const clientB = createSocketClient(userB.cookie);
+  await Promise.all([
+    new Promise<void>((r) => clientA.on('connect', r)),
+    new Promise<void>((r) => clientB.on('connect', r)),
+  ]);
+
+  clientA.emit('conversation:join', { conversationId: convId });
+  clientB.emit('conversation:join', { conversationId: convId });
+  await Promise.all([
+    new Promise<void>((r) => clientA.once('conversation:joined', () => r())),
+    new Promise<void>((r) => clientB.once('conversation:joined', () => r())),
+  ]);
+
+  const testKey = 'unique_idemp_key_999';
+
+  let ackReceivedKey: string | undefined;
+  let broadcastReceivedKey: string | undefined;
+
+  clientA.on('message:sent', (ack) => {
+    ackReceivedKey = ack.message.idempotencyKey;
+  });
+
+  clientB.on('message:new', (msg) => {
+    broadcastReceivedKey = msg.idempotencyKey;
+  });
+
+  clientA.emit('message:send', {
+    conversationId: convId,
+    content: 'Checking idempotency key preservation',
+    idempotencyKey: testKey,
+  });
+
+  await new Promise((r) => setTimeout(r, 300));
+
+  assert.equal(ackReceivedKey, testKey, 'message:sent payload.message must include idempotencyKey');
+  assert.equal(broadcastReceivedKey, testKey, 'message:new broadcast must include idempotencyKey');
+
+  // Verify REST history also includes idempotencyKey
+  const historyRes = await request(`/conversations/${convId}/messages`, {
+    cookie: userA.cookie,
+  });
+  assert.equal(historyRes.status, 200);
+  const historyData = await historyRes.json();
+  assert.equal(historyData.messages.length, 1);
+  assert.equal(historyData.messages[0].idempotencyKey, testKey, 'REST messages must include idempotencyKey');
 
   clientA.disconnect();
   clientB.disconnect();

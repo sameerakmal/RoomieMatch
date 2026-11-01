@@ -22,6 +22,7 @@ function formatMessage(msg: MessageDocument) {
     messageType: msg.messageType,
     readBy: msg.readBy.map((id) => id.toString()),
     createdAt: msg.createdAt.toISOString(),
+    idempotencyKey: msg.idempotencyKey || undefined,
   };
 }
 

@@ -21,6 +21,12 @@ import { useAuth } from '../hooks/useAuth';
 import { conversationsService } from '../services/conversations';
 import { getSocket } from '../services/socket';
 import { apiError } from '../services/api';
+import {
+  createOptimisticMessage,
+  mergeOlderMessages,
+  reconcileFailedMessage,
+  reconcileMessage,
+} from '../utils/messageDeduplication';
 import type {
   ConversationItem,
   MessageItem,
@@ -93,6 +99,17 @@ export function MessagesPage() {
     return () => controller.abort();
   }, [loadConversations]);
 
+  // Track refs for active conversation and user to keep socket listeners stable
+  const selectedConversationIdRef = useRef(selectedConversationId);
+  useEffect(() => {
+    selectedConversationIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
+
+  const currentUserIdRef = useRef(currentUserId);
+  useEffect(() => {
+    currentUserIdRef.current = currentUserId;
+  }, [currentUserId]);
+
   // 2. Fetch messages when selected conversation changes
   const loadMessages = useCallback(async (convId: string) => {
     setLoadingMessages(true);
@@ -100,6 +117,7 @@ export function MessagesPage() {
     setMessages([]);
     setNextCursor(null);
     setHasMore(false);
+    setIsTypingRemote(false);
 
     try {
       const data = await conversationsService.getMessages(convId, null, 30);
@@ -126,10 +144,11 @@ export function MessagesPage() {
       loadMessages(selectedConversationId);
     } else {
       setMessages([]);
+      setIsTypingRemote(false);
     }
   }, [selectedConversationId, loadMessages]);
 
-  // 3. Load older messages (cursor pagination)
+  // 3. Load older messages (cursor pagination with deduplication)
   const handleLoadOlder = async () => {
     if (!selectedConversationId || !nextCursor || loadingOlder) return;
 
@@ -140,7 +159,7 @@ export function MessagesPage() {
         nextCursor,
         30,
       );
-      setMessages((prev) => [...data.messages, ...prev]);
+      setMessages((prev) => mergeOlderMessages(prev, data.messages));
       setNextCursor(data.nextCursor);
       setHasMore(data.hasMore);
     } catch (err) {
@@ -157,14 +176,26 @@ export function MessagesPage() {
     }
   }, [messages, loadingOlder]);
 
-  // 4. Socket.IO Real-Time Event Handlers
+  // 4a. Manage Conversation Room Subscriptions (independent of listener attachment)
+  useEffect(() => {
+    if (!selectedConversationId) return;
+    const socket = getSocket();
+    socket.emit('conversation:join', { conversationId: selectedConversationId });
+
+    return () => {
+      socket.emit('conversation:leave', { conversationId: selectedConversationId });
+    };
+  }, [selectedConversationId]);
+
+  // 4b. Socket.IO Real-Time Event Handlers (registered once per component lifecycle)
   useEffect(() => {
     const socket = getSocket();
 
     function onConnect() {
       setIsConnected(true);
-      if (selectedConversationId) {
-        socket.emit('conversation:join', { conversationId: selectedConversationId });
+      const activeId = selectedConversationIdRef.current;
+      if (activeId) {
+        socket.emit('conversation:join', { conversationId: activeId });
       }
     }
 
@@ -173,21 +204,16 @@ export function MessagesPage() {
     }
 
     function onNewMessage(newMsg: MessageItem) {
-      // If belongs to current open conversation
-      if (newMsg.conversationId === selectedConversationId) {
-        setMessages((prev) => {
-          // Avoid duplicate insertion
-          if (prev.some((m) => m.id === newMsg.id || (newMsg.idempotencyKey && m.idempotencyKey === newMsg.idempotencyKey))) {
-            return prev.map((m) =>
-              m.idempotencyKey === newMsg.idempotencyKey ? newMsg : m,
-            );
-          }
-          return [...prev, newMsg];
-        });
+      const activeId = selectedConversationIdRef.current;
+      const myId = currentUserIdRef.current;
+
+      // If belongs to currently open conversation
+      if (newMsg.conversationId === activeId) {
+        setMessages((prev) => reconcileMessage(prev, newMsg));
 
         // Mark as read if received from other participant
-        if (newMsg.senderId !== currentUserId) {
-          socket.emit('message:read', { conversationId: selectedConversationId });
+        if (newMsg.senderId !== myId) {
+          socket.emit('message:read', { conversationId: activeId });
         }
       }
 
@@ -195,7 +221,7 @@ export function MessagesPage() {
       setConversations((prev) =>
         prev.map((c) => {
           if (c.id === newMsg.conversationId) {
-            const isCurrentChat = c.id === selectedConversationId;
+            const isCurrentChat = c.id === activeId;
             return {
               ...c,
               lastMessage: newMsg,
@@ -209,36 +235,40 @@ export function MessagesPage() {
     }
 
     function onMessageSent(payload: { message: MessageItem; idempotencyKey?: string }) {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.idempotencyKey && m.idempotencyKey === payload.idempotencyKey
-            ? { ...payload.message, pending: false }
-            : m,
-        ),
-      );
-    }
-
-    function onMessageFailed(payload: { error: string; idempotencyKey?: string }) {
-      if (payload.idempotencyKey) {
+      if (payload.message.conversationId === selectedConversationIdRef.current) {
         setMessages((prev) =>
-          prev.map((m) =>
-            m.idempotencyKey === payload.idempotencyKey
-              ? { ...m, pending: false, failed: true }
-              : m,
-          ),
+          reconcileMessage(prev, payload.message, payload.idempotencyKey),
         );
       }
-      setChatError(payload.error || 'Failed to send message.');
+    }
+
+    function onMessageFailed(payload: {
+      conversationId?: string;
+      error: string;
+      idempotencyKey?: string;
+    }) {
+      if (!payload.conversationId || payload.conversationId === selectedConversationIdRef.current) {
+        if (payload.idempotencyKey) {
+          setMessages((prev) => reconcileFailedMessage(prev, payload.idempotencyKey!));
+        }
+        setChatError(payload.error || 'Failed to send message.');
+      }
     }
 
     function onTypingUpdate(data: TypingUpdate) {
-      if (data.conversationId === selectedConversationId && data.userId !== currentUserId) {
+      if (
+        data.conversationId === selectedConversationIdRef.current &&
+        data.userId !== currentUserIdRef.current
+      ) {
         setIsTypingRemote(data.isTyping);
       }
     }
 
     function onReadReceipt(data: ReadReceiptUpdate) {
-      if (data.conversationId === selectedConversationId && data.readerId !== currentUserId) {
+      if (
+        data.conversationId === selectedConversationIdRef.current &&
+        data.readerId !== currentUserIdRef.current
+      ) {
         setMessages((prev) =>
           prev.map((m) =>
             !m.readBy.includes(data.readerId)
@@ -264,7 +294,10 @@ export function MessagesPage() {
         const exists = prev.some((c) => c.id === data.conversationId);
         if (!exists) {
           // Re-fetch conversation list if new conversation appeared
-          conversationsService.getConversations().then((res) => setConversations(res.conversations)).catch(() => {});
+          conversationsService
+            .getConversations()
+            .then((res) => setConversations(res.conversations))
+            .catch(() => {});
           return prev;
         }
         return prev.map((c) =>
@@ -280,7 +313,7 @@ export function MessagesPage() {
     }
 
     const onConversationRevoked = (payload: { conversationId?: string }) => {
-      if (payload?.conversationId === selectedConversationId) {
+      if (payload?.conversationId === selectedConversationIdRef.current) {
         setChatError('Messaging is unavailable because the connection is no longer accepted.');
       }
     };
@@ -303,11 +336,6 @@ export function MessagesPage() {
     socket.on('conversation:revoked', onConversationRevoked);
     socket.on('conversation:error', onConversationError);
 
-    // Join current conversation room
-    if (selectedConversationId) {
-      socket.emit('conversation:join', { conversationId: selectedConversationId });
-    }
-
     return () => {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
@@ -320,12 +348,8 @@ export function MessagesPage() {
       socket.off('conversation:updated', onConversationUpdated);
       socket.off('conversation:revoked', onConversationRevoked);
       socket.off('conversation:error', onConversationError);
-
-      if (selectedConversationId) {
-        socket.emit('conversation:leave', { conversationId: selectedConversationId });
-      }
     };
-  }, [selectedConversationId, currentUserId]);
+  }, []);
 
   // 5. Send message action
   const handleSendMessage = (e?: React.FormEvent) => {
@@ -334,20 +358,11 @@ export function MessagesPage() {
     if (!content || !selectedConversationId) return;
 
     const socket = getSocket();
-    const idempotencyKey = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
-    // Optimistic message item
-    const optimisticMessage: MessageItem = {
-      id: idempotencyKey,
+    const { message: optimisticMessage, idempotencyKey } = createOptimisticMessage({
       conversationId: selectedConversationId,
       senderId: currentUserId,
       content,
-      messageType: 'text',
-      readBy: [currentUserId],
-      createdAt: new Date().toISOString(),
-      idempotencyKey,
-      pending: true,
-    };
+    });
 
     setMessages((prev) => [...prev, optimisticMessage]);
     setInputText('');
@@ -688,11 +703,34 @@ export function MessagesPage() {
                               <div className="message-meta-row">
                                 <span className="message-time">{formatMessageTime(msg.createdAt)}</span>
                                 {isMe && (
-                                  <span className="receipt-indicator" title={isReadByPartner ? 'Read' : 'Sent'}>
-                                    {isReadByPartner ? (
-                                      <span className="receipt-read"><CheckCheck size={13} /> Read</span>
+                                  <span
+                                    className="receipt-indicator"
+                                    title={
+                                      msg.failed
+                                        ? 'Failed to send'
+                                        : msg.pending
+                                          ? 'Sending…'
+                                          : isReadByPartner
+                                            ? 'Read'
+                                            : 'Sent'
+                                    }
+                                  >
+                                    {msg.failed ? (
+                                      <span className="receipt-sent" style={{ color: '#c85a32' }}>
+                                        <AlertCircle size={13} /> Failed
+                                      </span>
+                                    ) : msg.pending ? (
+                                      <span className="receipt-sent">
+                                        <Clock size={12} />
+                                      </span>
+                                    ) : isReadByPartner ? (
+                                      <span className="receipt-read">
+                                        <CheckCheck size={13} /> Read
+                                      </span>
                                     ) : (
-                                      <span className="receipt-sent"><Check size={13} /> Sent</span>
+                                      <span className="receipt-sent">
+                                        <Check size={13} /> Sent
+                                      </span>
                                     )}
                                   </span>
                                 )}

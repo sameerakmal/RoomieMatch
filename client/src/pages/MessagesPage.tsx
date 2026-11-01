@@ -68,10 +68,15 @@ export function MessagesPage() {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isTypingLocalRef = useRef(false);
 
-  // Keep route in sync with selected conversation
+  // Keep route in sync with selected conversation and browser navigation
   useEffect(() => {
     if (routeConversationId) {
       setSelectedConversationId(routeConversationId);
+    } else {
+      // If at /messages without conversationId, reset on mobile to show the list view
+      if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+        setSelectedConversationId(null);
+      }
     }
   }, [routeConversationId]);
 
@@ -424,6 +429,10 @@ export function MessagesPage() {
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      // On mobile devices, Enter inserts a newline and user uses Send button
+      if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+        return;
+      }
       e.preventDefault();
       handleSendMessage();
     }
@@ -447,12 +456,12 @@ export function MessagesPage() {
 
   const selectConversation = (id: string) => {
     setSelectedConversationId(id);
-    navigate(`/messages/${id}`, { replace: true });
+    navigate(`/messages/${id}`);
   };
 
   const handleBackToList = () => {
     setSelectedConversationId(null);
-    navigate('/messages', { replace: true });
+    navigate('/messages');
   };
 
   const formatMessageTime = (isoString: string) => {
@@ -480,8 +489,8 @@ export function MessagesPage() {
 
   return (
     <DashboardLayout title="Messages & Chat">
-      {/* Top Header */}
-      <section className="messages-page-header">
+      {/* Top Header - hidden on mobile when viewing an active conversation to maximize chat space */}
+      <section className={`messages-page-header ${selectedConversationId ? 'hidden-on-mobile-chat' : ''}`}>
         <p className="eyebrow">Real-time messaging</p>
         <h1>
           Roommate <em>conversations.</em>
@@ -527,7 +536,7 @@ export function MessagesPage() {
           </div>
         </section>
       ) : (
-        <div className={`chat-layout ${selectedConversationId ? 'chat-active-mobile' : ''}`}>
+        <div className={`chat-layout ${selectedConversationId ? 'has-active-chat chat-active-mobile' : 'no-active-chat'}`}>
           {/* Left Panel: Conversation List */}
           <aside className="chat-sidebar">
             <div className="chat-search-bar">
@@ -641,8 +650,10 @@ export function MessagesPage() {
                       to={`/connections/${activeConversation.connectionId}`}
                       variant="text"
                       className="view-connection-btn"
+                      title="View connection details"
                     >
-                      <UserCheck size={14} /> View connection
+                      <UserCheck size={14} />
+                      <span className="view-connection-label">View connection</span>
                     </ButtonLink>
                   </div>
                 </header>
@@ -783,7 +794,11 @@ export function MessagesPage() {
                     <textarea
                       rows={2}
                       maxLength={4000}
-                      placeholder={`Message ${activeConversation.otherParticipant?.name.split(' ')[0]}… (Press Enter to send, Shift+Enter for new line)`}
+                      placeholder={
+                        typeof window !== 'undefined' && window.innerWidth <= 768
+                          ? `Message ${activeConversation.otherParticipant?.name.split(' ')[0] || 'roommate'}…`
+                          : `Message ${activeConversation.otherParticipant?.name.split(' ')[0] || 'roommate'}… (Press Enter to send, Shift+Enter for new line)`
+                      }
                       value={inputText}
                       onChange={handleInputChange}
                       onKeyDown={handleKeyDown}
@@ -808,8 +823,22 @@ export function MessagesPage() {
                 <div className="placeholder-icon">
                   <MessageSquare size={36} />
                 </div>
-                <h3>Select a conversation</h3>
-                <p>Choose a roommate from the left panel to review past messages and chat in real-time.</p>
+                <h3>{selectedConversationId ? 'Conversation not found' : 'Select a conversation'}</h3>
+                <p>
+                  {selectedConversationId
+                    ? "This conversation may have been removed or you don't have access to it."
+                    : 'Choose a roommate from the left panel to review past messages and chat in real-time.'}
+                </p>
+                {selectedConversationId && (
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={handleBackToList}
+                    style={{ marginTop: '16px', gap: '6px' }}
+                  >
+                    <ArrowLeft size={15} /> Back to conversations
+                  </button>
+                )}
               </div>
             )}
           </main>

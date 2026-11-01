@@ -13,7 +13,10 @@ const mongoUri = process.env.MONGODB_URI?.trim() || undefined;
 if (mongoUri && !/^mongodb(?:\+srv)?:\/\//.test(mongoUri)) throw new Error('MONGODB_URI must be a MongoDB connection string.');
 if (nodeEnv === 'production' && !mongoUri) throw new Error('MONGODB_URI is required in production.');
 if (nodeEnv === 'production' && !process.env.CLIENT_ORIGIN) throw new Error('CLIENT_ORIGIN is required in production.');
-const clientOrigins = (process.env.CLIENT_ORIGIN ?? 'http://localhost:5173,http://127.0.0.1:5173').split(',').map(origin => origin.trim()).filter(Boolean);
+const clientOrigins = (process.env.CLIENT_ORIGIN ?? 'http://localhost:5173,http://127.0.0.1:5173')
+  .split(',')
+  .map(origin => origin.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
 if (clientOrigins.length === 0 || clientOrigins.some(origin => {
   try { const parsed = new URL(origin); return !['http:', 'https:'].includes(parsed.protocol) || parsed.origin !== origin; }
   catch { return true; }

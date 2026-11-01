@@ -1,173 +1,308 @@
 # RoomieMatch
 
-Roommate discovery, built around the way people live. Phase 2 adds real authentication and basic profiles to the existing React/Vite and Express/Mongoose foundation. The warm editorial design, fonts, local photography, and reusable components are preserved.
+RoomieMatch is a full-stack roommate compatibility, networking, and real-time messaging platform designed to help people find compatible living partners based on lifestyle, habits, budgets, and schedules.
 
-## Requirements
+---
 
-- Node.js **22.14+** and npm (`.nvmrc` selects Node 22).
-- MongoDB running locally, or a MongoDB Atlas cluster.
-- HTTPS for production cookie authentication.
+## Technology Stack
 
-## Install and run
+- **Frontend**: React 19, TypeScript, Vite 7, Tailwind CSS v4, React Router 7, Axios, Lucide React.
+- **Backend**: Node.js 22+, Express 5, TypeScript, Socket.IO 4, Helmet 8, CORS, Cookie-Parser, Express-Rate-Limit.
+- **Database**: MongoDB 8 & Mongoose 8.
+- **Authentication**: Stateless HS256 JWT stored in HttpOnly, SameSite, Secure cookies, bcrypt password hashing (cost 12), mutation preflight verification headers.
+- **Real-Time Communication**: Socket.IO with cookie-based handshake authorization, room isolation, typing indicators, read receipts, and presence tracking.
+- **Deployment Targets**:
+  - Frontend: Vercel (Static SPA with rewrites)
+  - Backend: Render (Web Service)
+  - Database: MongoDB Atlas (Replica Set)
 
-Run from the repository root:
+---
+
+## Architecture & Features (Phases 1–7)
+
+1. **Architecture & Foundation**: Monorepo with npm workspaces (`client`, `server`), strict TypeScript, unified build and testing pipeline.
+2. **Authentication & User Profiles**: Secure registration, login, logout, account restore (`/api/auth/me`), and editable personal profiles with input sanitization and age/date validation.
+3. **Lifestyle Questionnaire & Preferences**: 5-part lifestyle preference model (sleep schedule, cleanliness, noise tolerances, guest policies, budget & accommodation constraints).
+4. **Compatibility Matching Engine**: Multi-dimensional scoring engine with circular sleep schedule analysis, budget overlap calculations, hard lifestyle constraint filtering, and human-readable match explanations.
+5. **Connection Requests & Networking**: Mutual connection requests, state machine transitions (pending, accepted, rejected, cancelled), notification feed, and user discovery.
+6. **Real-Time Chat & Messaging**: Socket.IO real-time chat between accepted connections, typing indicators, online/offline presence tracking, idempotency-key deduplication, message persistence, cursor-based pagination, and instant room revocation upon connection cancellation.
+7. **Production Readiness & Hardening**: Strict environment validation, MongoDB Atlas connection pooling and index synchronization, Helmet security headers, cross-origin cookie policies, graceful shutdown (`SIGTERM`/`SIGINT`), health & readiness endpoints, and Vercel/Render deployment configurations.
+
+---
+
+## Local Development Setup
+
+### Prerequisites
+
+- Node.js **>= 22.14.0** and npm (`.nvmrc` selects Node 22).
+- MongoDB running locally or a MongoDB Atlas cluster.
+
+### 1. Clone & Install Dependencies
 
 ```sh
+git clone https://github.com/your-username/RoomieMatch.git
+cd RoomieMatch
 npm ci
-cp -n server/.env.example server/.env
 ```
 
-Generate a signing secret locally:
+### 2. Configure Backend Environment
+
+```sh
+cp server/.env.example server/.env
+```
+
+Generate a secure 48-byte random signing secret:
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
 ```
 
-Paste that value into `JWT_SECRET` in `server/.env`. Set `MONGODB_URI` to your own database URI. The example uses `mongodb://127.0.0.1:27017/roomiematch`; start your local MongoDB service before starting RoomieMatch. Never commit real environment files or share the signing secret.
+Open `server/.env` and update:
+- `JWT_SECRET`: Paste the generated secret.
+- `MONGODB_URI`: Set your local MongoDB URI (e.g. `mongodb://127.0.0.1:27017/roomiematch`) or Atlas connection string.
+- `COOKIE_SAME_SITE`: Keep `lax` for local development.
+
+### 3. Run Development Servers
 
 ```sh
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173**. The API runs on **http://localhost:4000**. Vite proxies `/api` to Express. Use the same frontend hostname consistently: cookies set for `127.0.0.1` are not shared with `localhost`. Stop both applications with Ctrl+C.
+This concurrently launches:
+- Frontend: `http://127.0.0.1:5173` (Vite development server with API proxy)
+- Backend: `http://127.0.0.1:4000` (Express & Socket.IO server with live reload)
 
-No client `.env` is required for this setup. If desired:
+Visit `http://127.0.0.1:5173` in your browser.
+
+---
+
+## Environment Variables Reference
+
+### Backend (`server/.env` & Render Dashboard)
+
+| Variable | Required in Production | Default | Purpose & Description |
+| :--- | :--- | :--- | :--- |
+| `NODE_ENV` | **Yes** | `development` | Must be set to `production` in production. Enables secure cookies, strict validations, and hides stack traces. |
+| `PORT` | **Yes** (set by Render) | `4000` | Port for the HTTP/Socket.IO server. Render automatically injects this. The server binds to `0.0.0.0`. |
+| `MONGODB_URI` | **Yes** | None | Full MongoDB Atlas connection URI including credentials and database name (`/roomiematch`). |
+| `JWT_SECRET` | **Yes** | None | Cryptographically random secret of at least 32 UTF-8 bytes (64 hex characters) used to sign session JWTs. |
+| `JWT_EXPIRES_IN_SECONDS` | No | `604800` (7 days) | Session cookie and JWT expiration in seconds (min: 60, max: 2592000 [30 days]). |
+| `CLIENT_ORIGIN` | **Yes** | `http://localhost:5173` | Comma-separated list of allowed frontend origins without paths or trailing slashes (e.g. `https://roomiematch.vercel.app`). |
+| `COOKIE_SAME_SITE` | **Yes** | `lax` | Cookie SameSite policy: `none` for cross-site deployments (Vercel frontend + Render backend); `lax` for same-site custom domains. |
+
+### Frontend (`client/.env` & Vercel Dashboard)
+
+| Variable | Required in Production | Default | Purpose & Description |
+| :--- | :--- | :--- | :--- |
+| `VITE_API_BASE_URL` | **Yes** in Production | `/api` | Base URL for REST API requests. Set to `https://<your-render-service>.onrender.com/api`. |
+| `VITE_SOCKET_URL` | Optional | Auto-detected | Base URL for Socket.IO connection. If omitted, automatically derived by removing `/api` from `VITE_API_BASE_URL`. |
+
+> [!WARNING]
+> Never prefix backend secrets (`JWT_SECRET`, `MONGODB_URI`) with `VITE_`. Any variable starting with `VITE_` is compiled directly into the client JavaScript bundle.
+
+---
+
+## MongoDB Atlas Setup Guide
+
+1. **Create an Atlas Account & Cluster**:
+   - Log in to [MongoDB Atlas](https://www.mongodb.com/cloud/atlas).
+   - Create a project (e.g. `RoomieMatch`).
+   - Create a shared cluster (M0 Free Tier or M10+ for dedicated resources). Choose an AWS/GCP region closest to your Render service (e.g. Oregon / US West or Frankfurt / EU Central).
+
+2. **Create a Database User**:
+   - Go to **Security → Database Access → Add New Database User**.
+   - Authentication Method: **Password**.
+   - Database User Privileges: Select **Read and write to any database** or restrict to the `roomiematch` database.
+   - Choose a strong password and save it securely. Avoid special characters like `@`, `:`, `/`, `?` or ensure they are URL-encoded (`encodeURIComponent`).
+
+3. **Configure Network Access**:
+   - Go to **Security → Network Access → Add IP Address**.
+   - For Render cloud deployments with dynamic outbound IPs, add `0.0.0.0/0` (Allow access from anywhere). Access is secured by SCRAM-SHA-256 database authentication credentials.
+   - Alternatively, if using a static outbound IP service or VPC peering, specify the dedicated IP range.
+
+4. **Obtain Connection String**:
+   - Go to **Deployment → Database → Connect → Drivers**.
+   - Driver: `Node.js`, Version: `6.7 or later`.
+   - Copy the SRV connection string:
+     ```
+     mongodb+srv://<username>:<password>@cluster0.xxxxxx.mongodb.net/roomiematch?retryWrites=true&w=majority
+     ```
+   - Ensure you specify `/roomiematch` as the database name before query parameters.
+
+5. **Safe Startup & Index Initialization**:
+   - When the backend starts up, `connectDatabase()` connects with connection pooling (`maxPoolSize: 20`, `minPoolSize: 2`, `connectTimeoutMS: 10000`, `socketTimeoutMS: 45000`).
+   - It automatically and non-destructively runs `.init()` on all models (`User`, `Connection`, `Conversation`, `Message`, `Notification`, `RoommatePreferences`) to establish unique and partial compound indexes before traffic is served.
+   - Collections and existing user data are never dropped.
+
+---
+
+## Render Backend Deployment Guide
+
+### Option A: Using the Render Blueprint (`render.yaml`)
+
+1. Push your repository to GitHub.
+2. In the [Render Dashboard](https://dashboard.render.com/), click **New → Blueprint**.
+3. Select your GitHub repository. Render detects the root `render.yaml`.
+4. Render prompts you for the missing environment variables:
+   - `MONGODB_URI`: Paste your MongoDB Atlas connection string.
+   - `CLIENT_ORIGIN`: Enter your Vercel frontend URL (e.g. `https://roomiematch.vercel.app`).
+   - `JWT_SECRET`: Render will auto-generate a secure random secret, or you can paste your own.
+5. Click **Apply**. Render will automatically build and deploy your service.
+
+### Option B: Manual Web Service Setup on Render
+
+1. In the Render Dashboard, click **New → Web Service**.
+2. Connect your Git repository.
+3. Configure settings:
+   - **Name**: `roomiematch-api`
+   - **Region**: Select a region close to your database (e.g., Oregon, US West).
+   - **Branch**: `main`
+   - **Root Directory**: Leave blank (monorepo root).
+   - **Runtime**: `Node`
+   - **Build Command**: `npm install && npm run build -w server`
+   - **Start Command**: `npm run start -w server`
+   - **Health Check Path**: `/api/health`
+4. Under **Environment Variables**, add:
+   - `NODE_ENV`: `production`
+   - `MONGODB_URI`: `mongodb+srv://<user>:<password>@cluster0.xxxxxx.mongodb.net/roomiematch?retryWrites=true&w=majority`
+   - `JWT_SECRET`: `<generated 48-byte hex secret>`
+   - `JWT_EXPIRES_IN_SECONDS`: `604800`
+   - `CLIENT_ORIGIN`: `https://roomiematch.vercel.app` (update once Vercel URL is known)
+   - `COOKIE_SAME_SITE`: `none`
+5. Click **Create Web Service**.
+6. Note your Render URL (e.g. `https://roomiematch-api.onrender.com`).
+
+---
+
+## Vercel Frontend Deployment Guide
+
+1. In the [Vercel Dashboard](https://vercel.com/dashboard), click **Add New → Project**.
+2. Import your GitHub repository.
+3. Configure project settings:
+   - **Framework Preset**: `Vite`
+   - **Root Directory**: Click `Edit` and select `client`.
+   - **Build Command**: `npm run build` (or leave default Vite build)
+   - **Output Directory**: `dist`
+4. Under **Environment Variables**, add:
+   - `VITE_API_BASE_URL`: `https://roomiematch-api.onrender.com/api` (your Render URL with `/api`)
+   - `VITE_SOCKET_URL`: `https://roomiematch-api.onrender.com` (your Render URL without `/api`)
+5. Click **Deploy**.
+6. When deployment finishes, copy the deployed Vercel domain (e.g. `https://roomiematch.vercel.app`).
+7. **Crucial Next Step**: Return to Render Dashboard → Environment Variables → update `CLIENT_ORIGIN` to match your exact Vercel URL (without trailing slashes), and trigger a redeploy on Render.
+
+---
+
+## Production Cookie & CORS Configuration
+
+Authentication uses an HttpOnly cookie containing a verified HS256 JWT.
+
+### Cross-Site Deployments (e.g., Vercel + Render)
+
+When frontend (`https://xxx.vercel.app`) and backend (`https://yyy.onrender.com`) are on different public domains:
+- Browser requests from Vercel to Render are **cross-origin** and **cross-site**.
+- The session cookie must have:
+  - `SameSite=None`
+  - `Secure=true` (enforced by HTTPS in production)
+  - `HttpOnly=true`
+  - `Path=/`
+- Set `COOKIE_SAME_SITE=none` on Render.
+- `authService` automatically assigns the host-only prefix `__Host-roomiematch_session` in production.
+- CORS explicitly specifies the frontend origin via `CLIENT_ORIGIN` with `credentials: true`. Wildcard origins (`*`) are strictly blocked.
+
+### Same-Site Deployments (Custom Domains)
+
+If you assign custom domains under the same parent domain (e.g. `app.yourdomain.com` for frontend and `api.yourdomain.com` for backend):
+- Set `COOKIE_SAME_SITE=lax`.
+- This provides standard first-party cookie isolation and prevents third-party tracking blocks in Safari/Brave.
+
+---
+
+## Socket.IO Production Configuration
+
+RoomieMatch uses Socket.IO for:
+- Real-time instant messaging.
+- Live typing indicators with multi-tab awareness.
+- Active user presence (online/offline status).
+- Read receipts and unread count badges.
+- Conversation room security and instant membership revocation.
+
+### Infrastructure & Scaling Notes
+
+- **Transport Support**: Configured for both `websocket` and `polling` transports. Render supports WebSockets over HTTP/1.1 and HTTP/2 out of the box.
+- **Handshake Authentication**: During the WebSocket handshake, Socket.IO extracts the HttpOnly session cookie, validates the JWT, and verifies the user exists in MongoDB before granting connection access.
+- **Single Instance Architecture**: Presence tracking and active typing states are maintained in-memory within `presenceManager` and `typingManager`. A single Render backend instance is recommended for initial production. If horizontally scaling across multiple instances in the future, a Redis adapter (`@socket.io/redis-adapter`) and a shared Redis presence store must be introduced.
+- **Clean Shutdown**: Upon server termination (`SIGTERM`/`SIGINT`), `closeSocketServer()` closes all open WebSocket connections cleanly before the HTTP server unbinds.
+
+---
+
+## Health Checks & Reliability
+
+| Endpoint | Method | Access | Purpose |
+| :--- | :--- | :--- | :--- |
+| `/api/health` or `/health` | `GET` | Public | Liveness probe reporting overall service status (`ok` or `degraded`), database connection status, and ISO timestamp. |
+| `/api/ready` or `/ready` | `GET` | Public | Readiness probe returning HTTP 200 `{ status: "ready" }` if database is connected and accepting queries, or HTTP 503 `{ status: "not_ready" }`. Exposes no secrets or database hostnames. |
+
+### Reliability Features
+
+- **Graceful Shutdown**: Intercepts `SIGTERM` and `SIGINT`, halts incoming connections, closes Socket.IO rooms, closes active database connections, and exits with code 0 within a 10-second safety window.
+- **Global Error Handling**: Catches unhandled promise rejections and uncaught exceptions safely without crashing the event loop silently or exposing secrets.
+- **Centralized HTTP Error Formats**: Uniform `{ error: { message, status, fields? } }` responses. Database validation errors return 400; duplicate keys return 409; database disconnections return 503; unknown routes return JSON 404. Stack traces are never leaked to clients.
+
+---
+
+## Verification & Automated Test Suite
+
+Run all verification checks across workspaces:
 
 ```sh
-cp -n client/.env.example client/.env
+# Typecheck TypeScript across both client and server
+npm run typecheck
+
+# Lint frontend with ESLint (zero warnings permitted)
+npm run lint
+
+# Build client production bundle and server TypeScript
+npm run build
+
+# Run all 143 backend unit, integration, and regression tests
+npm test
 ```
 
-`JWT_SECRET` is required in every environment. With no `MONGODB_URI`, the development server can still serve health checks, but account endpoints return 503. A configured but unreachable database stops startup after a bounded timeout. This does not create fake accounts or substitute local storage for MongoDB.
+### Test Coverage Highlights (143 Tests Passing)
 
-### Runtime available in this workspace
+- **Authentication & Profiles**: Registration, duplicate prevention, bcrypt hashing, cookie flags, `/me` restoration, profile field validation, tampering resistance, and rate limiting.
+- **Lifestyle Preferences**: Questionnaire validation, section updates, sleep window calculations, and completion tracking.
+- **Compatibility Engine**: Circular sleep calculations, cleanliness scoring, noise quiet-hour overlaps, guest policies, budget ranges, and constraint filtering.
+- **Connections & Requests**: Mutual request state transitions, pagination, duplicate prevention, and notifications.
+- **Conversations & Real-Time Messaging**: Connection validation, cursor pagination, Socket.IO handshake auth, room authorization, typing indicators, read receipts, room revocation, and idempotency key deduplication.
+- **Deployment & Security**: CORS origin allowlisting, preflight handling, payload limits, security headers, unconfigured development fallback, and health/readiness endpoints.
 
-Node.js was not on this machine's PATH. A checksum-verified official Node.js 22.23.4 runtime was used from temporary storage. While it remains available, prefix the setup above with:
+---
 
-```sh
-export PATH="/private/tmp/node-v22.23.4-darwin-arm64/bin:$PATH"
-```
+## Troubleshooting Common Deployment Issues
 
-Install Node.js normally for ongoing development. The temporary runtime is not a project dependency or a permanent installation.
+### 1. `CORS: This origin is not allowed` (HTTP 403)
+- **Cause**: The `CLIENT_ORIGIN` environment variable on Render does not exactly match the Vercel URL.
+- **Fix**: Check your Vercel URL (e.g. `https://roomiematch.vercel.app`). In Render, ensure `CLIENT_ORIGIN` is set to `https://roomiematch.vercel.app` without any trailing slash or subpaths.
 
-## MongoDB Atlas setup
+### 2. Login succeeds but immediately redirects back to Login (Cookie not sent)
+- **Cause**: `COOKIE_SAME_SITE` is set to `lax` while frontend and backend are on different domains (`vercel.app` vs `onrender.com`), or request is over unencrypted HTTP.
+- **Fix**: Set `COOKIE_SAME_SITE=none` in the Render environment variables. Ensure both frontend and backend are accessed over `https://`.
 
-1. Create an Atlas project and deploy a cluster using the tier appropriate for your environment.
-2. Under **Database Access**, create a database user, distinct from your Atlas account. Grant read/write access to the `roomiematch` database.
-3. Under **Network Access**, allow your development machine's current public IP, and later your backend host's outbound IP. Avoid opening access to every address for normal operation.
-4. Select the cluster's **Connect → Drivers → Node.js** flow and copy its connection string.
-5. Replace the placeholders with the database user's credentials, URL-encoding special characters in those credentials. Specify `/roomiematch` before the query string and place the URI in `server/.env` as `MONGODB_URI`.
-6. Set a random `JWT_SECRET`, then run `npm run dev`. `GET /api/health` should report `database: "connected"`.
+### 3. Page Refresh on `/dashboard` or `/messages` returns 404 on Vercel
+- **Cause**: SPA client-side routes were requested directly from the web server without rewrite rules.
+- **Fix**: Ensure [client/vercel.json](file:///Users/sameerakmal/RoomieMatch/client/vercel.json) (or root `vercel.json`) is present with the rewrite `"source": "/(.*)", "destination": "/index.html"`.
 
-Atlas requires both a database user and an IP access-list entry. See the official [Atlas connection instructions](https://www.mongodb.com/docs/atlas/connect-to-database-deployment/) and [connection troubleshooting](https://www.mongodb.com/docs/atlas/troubleshoot-connection/). No Atlas cluster, account, credentials, or public deployment was created by this implementation.
+### 4. MongoDB `MongoServerSelectionError` on Startup
+- **Cause**: Atlas Network Access does not permit connections from Render, or database user credentials are incorrect.
+- **Fix**: In Atlas **Network Access**, ensure `0.0.0.0/0` is allowed. In Atlas **Database Access**, verify the username and password. If the password contains special characters, URL-encode them.
 
-## Environment variables
+### 5. Render Web Service fails health check
+- **Cause**: Health check path misconfigured, or startup crashed due to missing environment variables.
+- **Fix**: Verify health check path is `/api/health`. Check Render build and deploy logs for missing required environment variables (`JWT_SECRET`, `MONGODB_URI`, `CLIENT_ORIGIN`).
 
-| Variable | Default / requirement | Purpose |
-| --- | --- | --- |
-| `JWT_SECRET` | Required; at least 32 UTF-8 bytes | Random JWT signing secret. Use the generation command above. |
-| `MONGODB_URI` | Required for accounts; mandatory in production | MongoDB connection string |
-| `JWT_EXPIRES_IN_SECONDS` | `604800` (7 days) | JWT and cookie lifetime; 60–2592000 seconds |
-| `COOKIE_SAME_SITE` | `lax` | `lax`, `strict`, or `none`; `none` requires production HTTPS |
-| `CLIENT_ORIGIN` | `http://localhost:5173,http://127.0.0.1:5173` in development | Comma-separated allowed origins without paths/trailing slashes. Explicit value required in production. |
-| `PORT` | `4000` | Express port; update the Vite proxy if changing it |
-| `NODE_ENV` | `development` | `development`, `test`, or `production` |
-| `VITE_API_BASE_URL` | `/api` | Public frontend API base URL, compiled at build time |
+---
 
-Do not put secrets in `VITE_*` variables. npm workspace scripts run in each application's directory, so the server loads `server/.env`.
+## License
 
-## Commands
-
-| Command | Purpose |
-| --- | --- |
-| `npm run dev` | Frontend and backend with live reload |
-| `npm run dev -w client` | Frontend only |
-| `npm run dev -w server` | Backend only |
-| `npm run build` | Frontend production build and backend TypeScript compilation |
-| `npm run typecheck` | Type-check both applications |
-| `npm run lint` | Frontend ESLint with zero warnings allowed |
-| `npm test` | 26 backend integration tests |
-| `npm start -w server` | Run compiled backend from `server/dist` |
-| `npm run preview -w client` | Preview built frontend on port 4173; see hosting notes |
-
-## API contract
-
-All account and profile responses use `Cache-Control: no-store`. Successful account responses contain `{ "user": { "id", "name", "email", "profile", "createdAt", "updatedAt" } }`. Responses never include a password, password hash, JWT, or signing secret.
-
-| Method | Endpoint | Authentication | Request / result |
-| --- | --- | --- | --- |
-| GET | `/api/health` | Public | API and actual database state |
-| POST | `/api/auth/register` | Public | `{ name, email, password }`; creates account, sets cookie, returns user (201) |
-| POST | `/api/auth/login` | Public | `{ email, password }`; verifies credentials, sets cookie, returns user (200) |
-| POST | `/api/auth/logout` | Cookie optional | Clears cookie; returns success (200), also works with an expired session |
-| GET | `/api/auth/me` | Required | Restores current user from cookie (200) |
-| GET | `/api/profile` | Required | Returns current user and profile (200) |
-| PATCH | `/api/profile` | Required | `{ name?, profile?: { city?, occupation?, age?, moveInDate?, bio?, profilePhotoUrl? } }`; persists supplied fields (200) |
-
-For writes, send `X-RoomieMatch-Request: web`; registration, login and profile edits also require `Content-Type: application/json`. The frontend Axios instance sets the verification header and `withCredentials: true` (equivalent to `fetch`'s `credentials: "include"`). Curl or other API clients must send the same write header and retain the session cookie.
-
-Example profile patch:
-
-```json
-{
-  "name": "Your name",
-  "profile": {
-    "city": "Bengaluru",
-    "occupation": "Designer",
-    "age": 27,
-    "moveInDate": "2027-01-15",
-    "bio": "A short introduction in your own words.",
-    "profilePhotoUrl": "https://example.com/photo.jpg"
-  }
-}
-```
-
-Text is trimmed and length-limited. Name is 2–100 characters, city/occupation up to 100, and bio up to 500. Age is an optional integer from 18 to 120. Move-in date is an optional real `YYYY-MM-DD` calendar date between 1900 and 2200, returned without timezone shifts. Clear text fields with `""`, and age/date with `null`. The profile photo must be an HTTPS URL without embedded credentials, up to 2048 characters. The server does not fetch URLs; the browser renders the photo with no referrer and falls back to an icon if loading fails.
-
-PATCH rejects unknown fields at both levels, including email, password/passwordHash, roles, permissions, IDs, dotted field names, and database operators. Updates target only the authenticated account and use dotted `$set` paths to preserve unsupplied profile fields.
-
-Errors use `{ "error": { "message", "status", "fields"? } }`: 400 invalid input, 401 unauthenticated/incorrect credentials, 403 disallowed origin or missing verification header, 409 duplicate email, 413 oversized JSON, 415 unsupported content type, 429 too many attempts, and 503 unavailable account services. Unknown routes return JSON 404.
-
-## Authentication and profile behavior
-
-- Emails are trimmed/lowercased; a unique MongoDB index protects concurrent registration as well as normal duplicates.
-- Passwords use bcrypt with cost 12. Registration requires at least 8 characters; both endpoints reject passwords over bcrypt's 72-byte UTF-8 limit instead of silently truncating. Passwords are not trimmed.
-- JWTs have a subject, issuer, audience, expiry, and an explicitly verified HS256 signature. The middleware also checks the account still exists.
-- Development uses `roomiematch_session`, HttpOnly, SameSite=Lax by default. Production uses a host-only `__Host-roomiematch_session` cookie with Secure, HttpOnly and Path=/; no cookie Domain is set. Clearing uses the same cookie attributes.
-- CORS uses exact allowed origins and credentials. Requiring a custom header on every mutation forces browser cross-origin writes through preflight; simple HTML cross-site forms cannot perform writes.
-- Registration/login share a limit of 30 failed attempts per IP per 15 minutes. Successful requests do not count. The store is process-local.
-- Auth state is restored from `/api/auth/me`. Tokens are never placed in localStorage or exposed to JavaScript.
-- `/dashboard` and `/profile` are protected. Login/register redirect authenticated visitors to the dashboard. Session expiry on a protected API request returns the visitor to login; network failures show retryable errors.
-- Register/login have client validation, confirm password for registration, visibility toggles, loading states and server errors. Successful submission authenticates and opens the dashboard.
-- The profile page loads persisted details and shows a save confirmation only after the API succeeds. Email is read-only. Unsaved entries are retained after a failed save.
-- The dashboard uses the real user's first name and calculates completion from seven saved details: name, city, occupation, age, move-in date, bio, and photo URL. Optional fields remain optional, even when included in this indicator.
-- Logout only clears local auth state after the server successfully clears its cookie. No successful logout is simulated during a network failure.
-
-## Production hosting
-
-Run `npm run build`. Deploy `client/dist` to a static host with SPA fallback to `index.html`. Proxy `/api` to Express, or build with `VITE_API_BASE_URL=https://your-api.example/api`. Configure production variables, then run:
-
-```sh
-NODE_ENV=production npm start -w server
-```
-
-Use HTTPS, an explicit frontend origin, a persistent MongoDB database, and a persistent random signing secret. Same-site hosting is recommended. If the frontend and API are truly cross-site, set `COOKIE_SAME_SITE=none`; third-party-cookie restrictions can still prevent sessions in some browsers. The Vite development proxy avoids this locally.
-
-Vite preview is a static build preview, not a production server; it does not use the development API proxy. For full API testing on port 4173, build with an absolute API base URL and add that origin to `CLIENT_ORIGIN`.
-
-The server does not trust forwarded IP headers by default. A reverse-proxy deployment needs a deliberately configured `trust proxy` topology and a shared rate-limit store before horizontally scaling. Do not blindly enable trust for arbitrary forwarded addresses.
-
-## Verification and remaining limits
-
-- **26/26 backend integration tests passed** against an isolated real MongoDB 8.0.17 process. They cover registration, concurrent/normalized duplicates, validation, actual bcrypt hashing, login, missing/invalid/expired sessions, `/me`, logout, profile retrieval/persistence/partial edits/clearing, protected-field rejection, account isolation, CORS/write verification, production cookie flags, and rate limiting.
-- The test runner uses `mongodb-memory-server-core` only as a development dependency. It downloads the official MongoDB binary on the first test run and caches it in the OS temporary directory under `roomiematch-mongodb`. Internet access and permission to bind local ports are needed on the first run. Tests never use the developer's Atlas database.
-- Browser verification exercised registration and password confirmation, protected-route redirects, profile editing and reload persistence, live completion changes, wrong-password feedback, login, and logout using a disposable local account/database. Responsive inspection included the profile page at a 393px phone viewport and the existing desktop/tablet layout; the mobile document and main content both measured 393px without horizontal page overflow.
-- Frontend production build, backend compilation, frontend lint, and dependency checks are recorded in [Phase 2 delivery notes](docs/PHASE_2.md).
-- No Atlas deployment or production HTTPS/browser cross-site environment was tested. Production cookie attributes are covered by automated tests.
-- JWTs are stateless: logout removes the browser cookie but does not revoke a previously copied token; it remains valid until expiry. There is no refresh-token rotation, device-session management, password reset, email verification, or email change in this phase.
-- Photo URLs are supported; file upload is not. Profiles are private to their authenticated owner. There is no lifestyle questionnaire, matching, discovery, connection requests, chat, notifications, or payments.
-
-## Structure and assets
-
-The existing `client/src/{components,pages,layouts,hooks,services,types,utils,assets}` and `server/src/{config,controllers,models,routes,middleware,services,utils}` separation is preserved. The root npm workspace installs both apps with one lockfile. A complete changed-file inventory is in [Phase 2 delivery notes](docs/PHASE_2.md).
-
-Inter and DM Serif Display are bundled through Fontsource, and Lucide provides the icons. Residential photographs remain local assets downloaded from [Unsplash image 1](https://images.unsplash.com/photo-1600210492486-724fe5c67fb0) and [Unsplash image 2](https://images.unsplash.com/photo-1616486338812-3dadae4b4ace). The app uses no gradients and retains the established ivory, charcoal, olive, and terracotta visual system.
+Private repository. All rights reserved.

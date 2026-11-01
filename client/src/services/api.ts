@@ -3,8 +3,13 @@ import type { ApiErrorBody, HealthResponse } from '../types';
 
 // Axios's withCredentials is the equivalent of fetch's credentials: 'include'.
 // The JWT stays in an HttpOnly cookie and is never read or stored by JavaScript.
+const rawApiUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+const normalizedBaseUrl = rawApiUrl
+  ? (rawApiUrl.endsWith('/api') ? rawApiUrl.replace(/\/+$/, '') : `${rawApiUrl.replace(/\/+$/, '')}/api`)
+  : '/api';
+
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  baseURL: normalizedBaseUrl,
   timeout: 10000,
   withCredentials: true,
   headers: { Accept: 'application/json', 'X-RoomieMatch-Request': 'web' },

@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { env } from './config/env.js';
 import { HttpError } from './utils/HttpError.js';
@@ -14,7 +15,11 @@ import { conversationRoutes } from './routes/conversationRoutes.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 
 export const app = express();
+app.set('trust proxy', 1);
 app.disable('x-powered-by');
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use(cors({ credentials: true, origin(origin, callback) {
   if (!origin || env.clientOrigins.includes(origin)) callback(null, true);
   else callback(new HttpError(403, 'This origin is not allowed.'));
@@ -29,5 +34,6 @@ app.use('/api/connections', (_request, response, next) => { response.set('Cache-
 app.use('/api/notifications', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); }, notificationRoutes);
 app.use('/api/conversations', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); }, conversationRoutes);
 app.use('/api', healthRoutes);
+app.use('/', healthRoutes);
 app.use(notFound);
 app.use(errorHandler);

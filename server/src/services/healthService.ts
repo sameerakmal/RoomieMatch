@@ -7,3 +7,12 @@ export function getHealthStatus() {
   const healthy = database === 'connected' || (database === 'unconfigured' && env.nodeEnv !== 'production');
   return { status: healthy ? 'ok' : 'degraded', service: 'roomiematch-api', database, timestamp: new Date().toISOString() };
 }
+
+export function getReadinessStatus() {
+  const ready = mongoose.connection.readyState === 1 || (!env.mongoUri && env.nodeEnv !== 'production');
+  return {
+    status: ready ? 'ready' : 'not_ready',
+    service: 'roomiematch-api',
+    timestamp: new Date().toISOString(),
+  };
+}

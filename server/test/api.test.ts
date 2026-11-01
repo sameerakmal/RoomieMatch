@@ -29,6 +29,22 @@ test('health reports unconfigured development database honestly', async () => {
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.ok(Number.isFinite(Date.parse(body.timestamp)));
 });
+test('root health endpoint works identically to /api/health', async () => {
+  const response = await fetch(`${baseUrl}/health`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.status, 'ok');
+});
+test('readiness endpoint confirms readiness without exposing internal details', async () => {
+  const response = await fetch(`${baseUrl}/api/ready`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.status, 'ready');
+  assert.equal(body.service, 'roomiematch-api');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.ok(Number.isFinite(Date.parse(body.timestamp)));
+  assert.equal(body.database, undefined);
+});
 test('unknown API routes return a JSON 404', async () => {
   const response = await fetch(`${baseUrl}/api/missing`);
   assert.equal(response.status, 404);

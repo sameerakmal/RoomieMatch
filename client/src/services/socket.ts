@@ -5,9 +5,10 @@ let socketInstance: Socket | null = null;
 export function getSocket(): Socket {
   if (!socketInstance) {
     const rawApiUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '';
-    const socketUrl = rawApiUrl.startsWith('http')
+    const explicitSocketUrl = (import.meta.env.VITE_SOCKET_URL as string | undefined)?.trim();
+    const socketUrl = explicitSocketUrl || (rawApiUrl.startsWith('http')
       ? rawApiUrl.replace(/\/api\/?$/, '')
-      : window.location.origin;
+      : window.location.origin);
 
     socketInstance = io(socketUrl, {
       withCredentials: true,

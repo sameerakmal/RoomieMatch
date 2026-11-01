@@ -1,5 +1,9 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 
+const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+dotenv.config({ path: path.join(serverDir, '.env'), quiet: true });
 dotenv.config({ quiet: true });
 const port = Number(process.env.PORT ?? 4000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer between 1 and 65535.');
@@ -15,4 +19,14 @@ if (clientOrigins.length === 0 || clientOrigins.some(origin => {
   catch { return true; }
 })) throw new Error('CLIENT_ORIGIN must contain comma-separated HTTP(S) origins without paths.');
 
-export const env = { port, nodeEnv, mongoUri, clientOrigins };
+const jwtSecret = process.env.JWT_SECRET;
+if (!jwtSecret || Buffer.byteLength(jwtSecret, 'utf8') < 32) throw new Error('JWT_SECRET must be set to a randomly generated secret of at least 32 bytes.');
+const jwtExpiresInSeconds = Number(process.env.JWT_EXPIRES_IN_SECONDS ?? 604800);
+if (!Number.isInteger(jwtExpiresInSeconds) || jwtExpiresInSeconds < 60 || jwtExpiresInSeconds > 2592000) {
+  throw new Error('JWT_EXPIRES_IN_SECONDS must be between 60 and 2592000 (30 days).');
+}
+const cookieSameSite = process.env.COOKIE_SAME_SITE ?? 'lax';
+if (cookieSameSite !== 'lax' && cookieSameSite !== 'strict' && cookieSameSite !== 'none') throw new Error('COOKIE_SAME_SITE must be lax, strict, or none.');
+if (cookieSameSite === 'none' && nodeEnv !== 'production') throw new Error('SameSite=None requires production HTTPS and Secure cookies.');
+
+export const env = { port, nodeEnv, mongoUri, clientOrigins, jwtSecret, jwtExpiresInSeconds, cookieSameSite } as const;

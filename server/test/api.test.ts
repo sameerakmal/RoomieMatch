@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { randomBytes } from 'node:crypto';
 
 // Isolate these transport tests from developer database and CORS configuration.
 process.env.NODE_ENV = 'test';
 process.env.MONGODB_URI = '';
 process.env.CLIENT_ORIGIN = 'http://localhost:5173';
+process.env.JWT_SECRET = randomBytes(48).toString('hex');
+process.env.COOKIE_SAME_SITE = 'lax';
 const { app } = await import('../src/app.js');
 let server: Server;
 let baseUrl: string;

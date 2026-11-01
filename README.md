@@ -1,160 +1,173 @@
 # RoomieMatch
 
-A roommate discovery foundation built around the way people live. The interface uses warm ivory, charcoal, muted olive and terracotta, with DM Serif Display, Inter, and locally bundled residential photography. No gradients or external runtime font/image requests.
+Roommate discovery, built around the way people live. Phase 2 adds real authentication and basic profiles to the existing React/Vite and Express/Mongoose foundation. The warm editorial design, fonts, local photography, and reusable components are preserved.
 
 ## Requirements
 
-- Node.js **22.12 or newer** (Node 22 is selected in `.nvmrc`) and npm.
-- A local MongoDB instance or MongoDB Atlas connection string when you want to connect a database.
+- Node.js **22.14+** and npm (`.nvmrc` selects Node 22).
+- MongoDB running locally, or a MongoDB Atlas cluster.
+- HTTPS for production cookie authentication.
 
-## Quick start
+## Install and run
 
-From the project root:
+Run from the repository root:
 
 ```sh
 npm ci
+cp -n server/.env.example server/.env
+```
+
+Generate a signing secret locally:
+
+```sh
+node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
+```
+
+Paste that value into `JWT_SECRET` in `server/.env`. Set `MONGODB_URI` to your own database URI. The example uses `mongodb://127.0.0.1:27017/roomiematch`; start your local MongoDB service before starting RoomieMatch. Never commit real environment files or share the signing secret.
+
+```sh
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173**. The API runs at **http://localhost:4000**. Both applications run together, with Vite proxying `/api` to the backend. Port 4000 avoids the AirPlay service commonly using port 5000 on macOS. Stop both applications with Ctrl+C.
+Open **http://127.0.0.1:5173**. The API runs on **http://localhost:4000**. Vite proxies `/api` to Express. Use the same frontend hostname consistently: cookies set for `127.0.0.1` are not shared with `localhost`. Stop both applications with Ctrl+C.
 
-No environment file is needed for the development UI and health endpoint. Without `MONGODB_URI`, the API explicitly reports `database: "unconfigured"`; it does not simulate a database connection. The foundation has no database-backed features yet.
-
-To enable MongoDB:
+No client `.env` is required for this setup. If desired:
 
 ```sh
-cp server/.env.example server/.env
-cp client/.env.example client/.env
+cp -n client/.env.example client/.env
 ```
 
-Edit `server/.env` with your MongoDB connection string and start MongoDB before running the application. The example uses `mongodb://127.0.0.1:27017/roomiematch`. For Atlas, supply your own URI and configure network access in Atlas. Never commit real `.env` files. `VITE_*` variables are public frontend configuration and must never contain secrets.
+`JWT_SECRET` is required in every environment. With no `MONGODB_URI`, the development server can still serve health checks, but account endpoints return 503. A configured but unreachable database stops startup after a bounded timeout. This does not create fake accounts or substitute local storage for MongoDB.
 
-If a configured database is unavailable, startup fails after a bounded connection timeout rather than claiming success. In production, both `MONGODB_URI` and `CLIENT_ORIGIN` are required. A database connection lost after startup makes the health endpoint return HTTP 503.
+### Runtime available in this workspace
 
-### This workspace's runtime
-
-The implementation environment did not have Node.js on PATH. A SHA-256 verified official Node.js 22.23.4 runtime was used from `/private/tmp/node-v22.23.4-darwin-arm64`. While that temporary directory exists, you can run:
+Node.js was not on this machine's PATH. A checksum-verified official Node.js 22.23.4 runtime was used from temporary storage. While it remains available, prefix the setup above with:
 
 ```sh
 export PATH="/private/tmp/node-v22.23.4-darwin-arm64/bin:$PATH"
-npm run dev
 ```
 
-Install Node.js normally for ongoing development; the temporary runtime is not part of the project or a permanent machine installation.
+Install Node.js normally for ongoing development. The temporary runtime is not a project dependency or a permanent installation.
+
+## MongoDB Atlas setup
+
+1. Create an Atlas project and deploy a cluster using the tier appropriate for your environment.
+2. Under **Database Access**, create a database user, distinct from your Atlas account. Grant read/write access to the `roomiematch` database.
+3. Under **Network Access**, allow your development machine's current public IP, and later your backend host's outbound IP. Avoid opening access to every address for normal operation.
+4. Select the cluster's **Connect → Drivers → Node.js** flow and copy its connection string.
+5. Replace the placeholders with the database user's credentials, URL-encoding special characters in those credentials. Specify `/roomiematch` before the query string and place the URI in `server/.env` as `MONGODB_URI`.
+6. Set a random `JWT_SECRET`, then run `npm run dev`. `GET /api/health` should report `database: "connected"`.
+
+Atlas requires both a database user and an IP access-list entry. See the official [Atlas connection instructions](https://www.mongodb.com/docs/atlas/connect-to-database-deployment/) and [connection troubleshooting](https://www.mongodb.com/docs/atlas/troubleshoot-connection/). No Atlas cluster, account, credentials, or public deployment was created by this implementation.
+
+## Environment variables
+
+| Variable | Default / requirement | Purpose |
+| --- | --- | --- |
+| `JWT_SECRET` | Required; at least 32 UTF-8 bytes | Random JWT signing secret. Use the generation command above. |
+| `MONGODB_URI` | Required for accounts; mandatory in production | MongoDB connection string |
+| `JWT_EXPIRES_IN_SECONDS` | `604800` (7 days) | JWT and cookie lifetime; 60–2592000 seconds |
+| `COOKIE_SAME_SITE` | `lax` | `lax`, `strict`, or `none`; `none` requires production HTTPS |
+| `CLIENT_ORIGIN` | `http://localhost:5173,http://127.0.0.1:5173` in development | Comma-separated allowed origins without paths/trailing slashes. Explicit value required in production. |
+| `PORT` | `4000` | Express port; update the Vite proxy if changing it |
+| `NODE_ENV` | `development` | `development`, `test`, or `production` |
+| `VITE_API_BASE_URL` | `/api` | Public frontend API base URL, compiled at build time |
+
+Do not put secrets in `VITE_*` variables. npm workspace scripts run in each application's directory, so the server loads `server/.env`.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | Run both applications with live reload |
-| `npm run dev -w client` | Run only the React frontend |
-| `npm run dev -w server` | Run only the Express backend |
-| `npm run build` | Build frontend production assets and compile backend TypeScript |
+| `npm run dev` | Frontend and backend with live reload |
+| `npm run dev -w client` | Frontend only |
+| `npm run dev -w server` | Backend only |
+| `npm run build` | Frontend production build and backend TypeScript compilation |
 | `npm run typecheck` | Type-check both applications |
-| `npm test` | Run six API integration tests using Node's test runner |
-| `npm run preview -w client` | Preview the built frontend on port 4173 |
-| `npm start -w server` | Run the compiled backend |
+| `npm run lint` | Frontend ESLint with zero warnings allowed |
+| `npm test` | 26 backend integration tests |
+| `npm start -w server` | Run compiled backend from `server/dist` |
+| `npm run preview -w client` | Preview built frontend on port 4173; see hosting notes |
 
-## Pages and phase boundaries
+## API contract
 
-| Route | Included behavior |
-| --- | --- |
-| `/` | Editorial landing page, three-step introduction, five compatibility categories, rationale, CTA and footer |
-| `/login` | Email/password validation, password visibility toggle, registration and preview links |
-| `/register` | Name/email/password validation, accessible errors, login and preview links |
-| `/dashboard` | Explicit public preview, welcoming copy, sidebar anchors, 0% profile completion, empty recommendations, real API availability indicator |
-| Any other route | Designed 404 page with home navigation |
+All account and profile responses use `Cache-Control: no-store`. Successful account responses contain `{ "user": { "id", "name", "email", "profile", "createdAt", "updatedAt" } }`. Responses never include a password, password hash, JWT, or signing secret.
 
-Login and registration **do not authenticate, create accounts, persist credentials, or send form values to the API**. Valid submission explains this and offers the dashboard preview. Preview form values exist only in component memory and are discarded on navigation. Browser autofill/password managers remain controlled by the browser.
+| Method | Endpoint | Authentication | Request / result |
+| --- | --- | --- | --- |
+| GET | `/api/health` | Public | API and actual database state |
+| POST | `/api/auth/register` | Public | `{ name, email, password }`; creates account, sets cookie, returns user (201) |
+| POST | `/api/auth/login` | Public | `{ email, password }`; verifies credentials, sets cookie, returns user (200) |
+| POST | `/api/auth/logout` | Cookie optional | Clears cookie; returns success (200), also works with an expired session |
+| GET | `/api/auth/me` | Required | Restores current user from cookie (200) |
+| GET | `/api/profile` | Required | Returns current user and profile (200) |
+| PATCH | `/api/profile` | Required | `{ name?, profile?: { city?, occupation?, age?, moveInDate?, bio?, profilePhotoUrl? } }`; persists supplied fields (200) |
 
-There are no questionnaires, matching algorithms, connection requests, chat, or notifications. Future profile sections are clearly marked coming soon. No fabricated users, testimonials, or recommendations are shown. The dashboard greeting uses “future roomie” until genuine authenticated user data exists.
+For writes, send `X-RoomieMatch-Request: web`; registration, login and profile edits also require `Content-Type: application/json`. The frontend Axios instance sets the verification header and `withCredentials: true` (equivalent to `fetch`'s `credentials: "include"`). Curl or other API clients must send the same write header and retain the session cookie.
 
-## Project structure
-
-```text
-client/
-  public/                  Favicon
-  src/
-    assets/                Bundled residential photography
-    components/            Brand, Navbar, Footer, Buttons, FormInput, LoadingState
-    pages/                 Landing, Login/Registration, Dashboard, NotFound
-    layouts/               SiteLayout and AuthLayout
-    hooks/                 Abortable API health request
-    services/              Axios client
-    types/                 Shared frontend interfaces
-    utils/                 Form validation
-    App.tsx                Routes, titles and scroll behavior
-    main.tsx               Entry point and local fonts
-    styles.css             Tailwind theme and responsive visual system
-  .env.example
-  vite.config.ts
-server/
-  src/
-    config/                Validated environment and MongoDB connection
-    controllers/           Health response
-    models/                Reserved for future Mongoose models
-    routes/                API route registration
-    middleware/            Centralized errors and JSON 404s
-    services/              Actual database health state
-    utils/                 Typed HTTP error
-    app.ts                 Testable Express setup
-    index.ts               Startup and graceful shutdown
-  test/                    HTTP, JSON errors, size limit and CORS tests
-  .env.example
-```
-
-The root npm workspace shares dependency installation and lockfile while keeping the two applications, configurations, and build outputs separate.
-
-## API
-
-```sh
-curl http://localhost:4000/api/health
-```
-
-Example without a configured development database:
+Example profile patch:
 
 ```json
 {
-  "status": "ok",
-  "service": "roomiematch-api",
-  "database": "unconfigured",
-  "timestamp": "<current ISO timestamp>"
+  "name": "Your name",
+  "profile": {
+    "city": "Bengaluru",
+    "occupation": "Designer",
+    "age": 27,
+    "moveInDate": "2027-01-15",
+    "bio": "A short introduction in your own words.",
+    "profilePhotoUrl": "https://example.com/photo.jpg"
+  }
 }
 ```
 
-`status: "ok"` means the foundation API is available; check `database` for connectivity. Configured but disconnected databases return `status: "degraded"` with HTTP 503. Successful database connections report `database: "connected"`.
+Text is trimmed and length-limited. Name is 2–100 characters, city/occupation up to 100, and bio up to 500. Age is an optional integer from 18 to 120. Move-in date is an optional real `YYYY-MM-DD` calendar date between 1900 and 2200, returned without timezone shifts. Clear text fields with `""`, and age/date with `null`. The profile photo must be an HTTPS URL without embedded credentials, up to 2048 characters. The server does not fetch URLs; the browser renders the photo with no referrer and falls back to an icon if loading fails.
 
-Unknown routes return a JSON 404. Invalid JSON returns 400; JSON over 16 KB returns 413. CORS uses an explicit origin allowlist and supports preflight requests. Error responses do not expose stack traces or connection strings. CORS is not authentication.
+PATCH rejects unknown fields at both levels, including email, password/passwordHash, roles, permissions, IDs, dotted field names, and database operators. Updates target only the authenticated account and use dotted `$set` paths to preserve unsupplied profile fields.
 
-## Environment reference
+Errors use `{ "error": { "message", "status", "fields"? } }`: 400 invalid input, 401 unauthenticated/incorrect credentials, 403 disallowed origin or missing verification header, 409 duplicate email, 413 oversized JSON, 415 unsupported content type, 429 too many attempts, and 503 unavailable account services. Unknown routes return JSON 404.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `4000` | Backend HTTP port |
-| `NODE_ENV` | `development` | `development`, `test`, or `production` |
-| `CLIENT_ORIGIN` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowed frontend origins, without trailing slashes |
-| `MONGODB_URI` | Unset | Mongoose connection URI; mandatory in production |
-| `VITE_API_BASE_URL` | `/api` | Frontend API base URL, configured at build time |
+## Authentication and profile behavior
 
-If changing the backend port, also update the target in `client/vite.config.ts`, or set an absolute `VITE_API_BASE_URL` and allow the frontend origin. npm workspace commands load `server/.env` from the server application's directory.
+- Emails are trimmed/lowercased; a unique MongoDB index protects concurrent registration as well as normal duplicates.
+- Passwords use bcrypt with cost 12. Registration requires at least 8 characters; both endpoints reject passwords over bcrypt's 72-byte UTF-8 limit instead of silently truncating. Passwords are not trimmed.
+- JWTs have a subject, issuer, audience, expiry, and an explicitly verified HS256 signature. The middleware also checks the account still exists.
+- Development uses `roomiematch_session`, HttpOnly, SameSite=Lax by default. Production uses a host-only `__Host-roomiematch_session` cookie with Secure, HttpOnly and Path=/; no cookie Domain is set. Clearing uses the same cookie attributes.
+- CORS uses exact allowed origins and credentials. Requiring a custom header on every mutation forces browser cross-origin writes through preflight; simple HTML cross-site forms cannot perform writes.
+- Registration/login share a limit of 30 failed attempts per IP per 15 minutes. Successful requests do not count. The store is process-local.
+- Auth state is restored from `/api/auth/me`. Tokens are never placed in localStorage or exposed to JavaScript.
+- `/dashboard` and `/profile` are protected. Login/register redirect authenticated visitors to the dashboard. Session expiry on a protected API request returns the visitor to login; network failures show retryable errors.
+- Register/login have client validation, confirm password for registration, visibility toggles, loading states and server errors. Successful submission authenticates and opens the dashboard.
+- The profile page loads persisted details and shows a save confirmation only after the API succeeds. Email is read-only. Unsaved entries are retained after a failed save.
+- The dashboard uses the real user's first name and calculates completion from seven saved details: name, city, occupation, age, move-in date, bio, and photo URL. Optional fields remain optional, even when included in this indicator.
+- Logout only clears local auth state after the server successfully clears its cookie. No successful logout is simulated during a network failure.
 
 ## Production hosting
 
-Run `npm run build`. Deploy `client/dist` on a static host with an SPA fallback to `index.html` for frontend routes. Proxy `/api` to the Express server, or build with `VITE_API_BASE_URL=https://your-api.example/api`. Start the backend with `NODE_ENV=production npm start -w server` after configuring its production environment. Build output lives in `server/dist`.
+Run `npm run build`. Deploy `client/dist` to a static host with SPA fallback to `index.html`. Proxy `/api` to Express, or build with `VITE_API_BASE_URL=https://your-api.example/api`. Configure production variables, then run:
 
-The Vite preview command is only a static build preview; it is not a production server and does not use the development API proxy. For API access from port 4173, build with an absolute API base URL and include that preview origin in `CLIENT_ORIGIN`, or use the integrated development command above.
+```sh
+NODE_ENV=production npm start -w server
+```
 
-## Verification
+Use HTTPS, an explicit frontend origin, a persistent MongoDB database, and a persistent random signing secret. Same-site hosting is recommended. If the frontend and API are truly cross-site, set `COOKIE_SAME_SITE=none`; third-party-cookie restrictions can still prevent sessions in some browsers. The Vite development proxy avoids this locally.
 
-Both production builds passed. The six HTTP integration tests cover actual HTTP responses, health, unknown routes, invalid/oversized JSON, CORS allow/reject behavior, and preflight handling. They use a disposable loopback listener and intentionally do not require MongoDB.
+Vite preview is a static build preview, not a production server; it does not use the development API proxy. For full API testing on port 4173, build with an absolute API base URL and add that origin to `CLIENT_ORIGIN`.
 
-The development frontend and proxied health endpoint were exercised locally. Browser checks covered the desktop landing and registration pages, mobile landing/login/dashboard layouts at 400px, mobile menu and section navigation, empty-field validation, and the valid-registration preview notice. A missing space at a responsive line break was found and corrected. Test servers were stopped after verification.
+The server does not trust forwarded IP headers by default. A reverse-proxy deployment needs a deliberately configured `trust proxy` topology and a shared rate-limit store before horizontally scaling. Do not blindly enable trust for arbitrary forwarded addresses.
 
-A live MongoDB connection requires a running MongoDB instance or an Atlas URI; neither is supplied with this foundation.
+## Verification and remaining limits
 
-## Assets and references
+- **26/26 backend integration tests passed** against an isolated real MongoDB 8.0.17 process. They cover registration, concurrent/normalized duplicates, validation, actual bcrypt hashing, login, missing/invalid/expired sessions, `/me`, logout, profile retrieval/persistence/partial edits/clearing, protected-field rejection, account isolation, CORS/write verification, production cookie flags, and rate limiting.
+- The test runner uses `mongodb-memory-server-core` only as a development dependency. It downloads the official MongoDB binary on the first test run and caches it in the OS temporary directory under `roomiematch-mongodb`. Internet access and permission to bind local ports are needed on the first run. Tests never use the developer's Atlas database.
+- Browser verification exercised registration and password confirmation, protected-route redirects, profile editing and reload persistence, live completion changes, wrong-password feedback, login, and logout using a disposable local account/database. Responsive inspection included the profile page at a 393px phone viewport and the existing desktop/tablet layout; the mobile document and main content both measured 393px without horizontal page overflow.
+- Frontend production build, backend compilation, frontend lint, and dependency checks are recorded in [Phase 2 delivery notes](docs/PHASE_2.md).
+- No Atlas deployment or production HTTPS/browser cross-site environment was tested. Production cookie attributes are covered by automated tests.
+- JWTs are stateless: logout removes the browser cookie but does not revoke a previously copied token; it remains valid until expiry. There is no refresh-token rotation, device-session management, password reset, email verification, or email change in this phase.
+- Photo URLs are supported; file upload is not. Profiles are private to their authenticated owner. There is no lifestyle questionnaire, matching, discovery, connection requests, chat, notifications, or payments.
 
-- Residential photos downloaded from [Unsplash image 1](https://images.unsplash.com/photo-1600210492486-724fe5c67fb0) and [Unsplash image 2](https://images.unsplash.com/photo-1616486338812-3dadae4b4ace); retained locally under `client/src/assets`.
-- Fonts are bundled via Fontsource packages, with their included font licenses.
-- Icons: Lucide React.
-- Stack references: [Vite setup](https://vite.dev/guide/) and [Express error handling](https://expressjs.com/en/5x/guide/error-handling/).
+## Structure and assets
+
+The existing `client/src/{components,pages,layouts,hooks,services,types,utils,assets}` and `server/src/{config,controllers,models,routes,middleware,services,utils}` separation is preserved. The root npm workspace installs both apps with one lockfile. A complete changed-file inventory is in [Phase 2 delivery notes](docs/PHASE_2.md).
+
+Inter and DM Serif Display are bundled through Fontsource, and Lucide provides the icons. Residential photographs remain local assets downloaded from [Unsplash image 1](https://images.unsplash.com/photo-1600210492486-724fe5c67fb0) and [Unsplash image 2](https://images.unsplash.com/photo-1616486338812-3dadae4b4ace). The app uses no gradients and retains the established ivory, charcoal, olive, and terracotta visual system.

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { ArrowLeft, Compass, House, Leaf, LogOut, UserRound } from 'lucide-react';
+import { ArrowLeft, Compass, House, Leaf, LogOut, SlidersHorizontal, UserRound } from 'lucide-react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { Brand } from '../components/Brand';
 import { Button } from '../components/Button';
@@ -30,6 +30,7 @@ export function DashboardLayout({ children, title = 'Your home base' }: { childr
       <nav aria-label="Dashboard navigation">
         <NavLink to="/dashboard" end><House size={19} /> Overview</NavLink>
         <NavLink to="/profile"><UserRound size={19} /> Your profile</NavLink>
+        <NavLink to="/preferences"><SlidersHorizontal size={19} /> Roommate preferences</NavLink>
         <Link to="/dashboard#recommendations"><Compass size={19} /> Roommate discovery</Link>
       </nav>
       <div className="sidebar-bottom"><Leaf size={27} strokeWidth={1.25} /><p>Good things take<br />a little growing.</p><Link to="/"><ArrowLeft size={15} /> Back to the website</Link></div>

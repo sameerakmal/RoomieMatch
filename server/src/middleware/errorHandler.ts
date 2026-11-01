@@ -13,7 +13,7 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, _request, resp
     status = 409; message = 'An account with this email already exists.'; fields = { email: 'This email is already registered. Try logging in.' };
   }
   else if (error instanceof mongoose.Error.ValidationError || error instanceof mongoose.Error.CastError || error instanceof mongoose.Error.StrictModeError) {
-    status = 400; message = 'Please check your profile fields and try again.';
+    status = 400; message = 'Please check the submitted fields and try again.';
   }
   else if (error instanceof mongoose.mongo.MongoNetworkError || error instanceof mongoose.mongo.MongoServerSelectionError) {
     status = 503; message = 'Account services are temporarily unavailable. Please try again shortly.';

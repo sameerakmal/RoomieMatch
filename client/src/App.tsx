@@ -5,6 +5,7 @@ import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { PreferencesPage } from './pages/PreferencesPage';
 import { AuthRoute } from './components/AuthRoute';
 
 export function App() {
@@ -12,7 +13,14 @@ export function App() {
   useEffect(() => {
     if (hash) document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth' });
     else window.scrollTo(0, 0);
-    const titles: Record<string, string> = { '/': 'Find your kind of home', '/login': 'Welcome back', '/register': 'Make room for something good', '/dashboard': 'Your home base', '/profile': 'A little about you' };
+    const titles: Record<string, string> = {
+      '/': 'Find your kind of home',
+      '/login': 'Welcome back',
+      '/register': 'Make room for something good',
+      '/dashboard': 'Your home base',
+      '/profile': 'A little about you',
+      '/preferences': 'Roommate preferences',
+    };
     document.title = `RoomieMatch — ${titles[pathname] ?? 'Page not found'}`;
   }, [pathname, hash]);
   return <Routes>
@@ -24,6 +32,7 @@ export function App() {
     <Route element={<AuthRoute />}>
       <Route path="/dashboard" element={<DashboardPage />} />
       <Route path="/profile" element={<ProfilePage />} />
+      <Route path="/preferences" element={<PreferencesPage />} />
     </Route>
     <Route path="*" element={<NotFoundPage />} />
   </Routes>;

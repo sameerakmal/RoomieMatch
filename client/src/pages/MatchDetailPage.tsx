@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, CheckCircle2, AlertCircle, HelpCircle, Moon, Sparkles, Volume2, Users, Wallet, HeartHandshake, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Check, CheckCircle2, AlertCircle, Clock, HeartHandshake, HelpCircle, Moon, ShieldCheck, Sparkles, UserCheck, UserPlus, Users, Volume2, Wallet } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { ButtonLink } from '../components/Button';
 import { LoadingState } from '../components/LoadingState';
 import { ProfileAvatar } from '../components/ProfileAvatar';
+import { ConnectModal } from '../components/ConnectModal';
 import { DashboardLayout } from '../layouts/DashboardLayout';
 import { matchingService } from '../services/matching';
+import { connectionsService } from '../services/connections';
 import { apiError } from '../services/api';
 import type { CategoryKey, MatchDetailResponse } from '../types';
 
@@ -29,6 +31,9 @@ export function MatchDetailPage() {
   const [data, setData] = useState<MatchDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [isConnectOpen, setIsConnectOpen] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
 
   useEffect(() => {
     if (!userId) return;
@@ -53,6 +58,42 @@ export function MatchDetailPage() {
 
     return () => controller.abort();
   }, [userId]);
+
+  const handleSendConnection = async (message: string) => {
+    if (!data) return;
+    const res = await connectionsService.sendRequest(data.candidate.id, message);
+    setData({
+      ...data,
+      connection: {
+        id: res.connection.id,
+        status: 'pending',
+        direction: 'sent',
+      },
+    });
+    setFeedback(`Connection request sent to ${data.candidate.name}.`);
+  };
+
+  const handleAcceptRequest = async () => {
+    if (!data || !data.connection) return;
+    setActionBusy(true);
+    setError(null);
+    setFeedback(null);
+    try {
+      await connectionsService.acceptRequest(data.connection.id);
+      setData({
+        ...data,
+        connection: {
+          ...data.connection,
+          status: 'accepted',
+        },
+      });
+      setFeedback(`You are now connected with ${data.candidate.name}!`);
+    } catch (err) {
+      setError(apiError(err).message);
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -91,6 +132,17 @@ export function MatchDetailPage() {
         </Link>
       </div>
 
+      {feedback && (
+        <div className="form-message form-message-success" role="status">
+          <Check size={16} /> {feedback}
+        </div>
+      )}
+      {error && (
+        <div className="form-message form-message-error" role="alert">
+          {error}
+        </div>
+      )}
+
       {/* Candidate Profile Summary Banner */}
       <section className="match-profile-banner">
         <div className="match-avatar-col">
@@ -111,6 +163,44 @@ export function MatchDetailPage() {
           {candidate.profile.bio && (
             <p className="match-bio">“{candidate.profile.bio}”</p>
           )}
+
+          {/* Action button */}
+          <div className="match-action-row">
+            {data.connection?.status === 'accepted' ? (
+              <ButtonLink
+                to={`/connections/${data.connection.id}`}
+                variant="secondary"
+                className="btn-connected"
+              >
+                <UserCheck size={15} /> Connected
+              </ButtonLink>
+            ) : data.connection?.status === 'pending' && data.connection.direction === 'sent' ? (
+              <button
+                type="button"
+                disabled
+                className="button button-secondary btn-pending"
+              >
+                <Clock size={15} /> Connection request pending
+              </button>
+            ) : data.connection?.status === 'pending' && data.connection.direction === 'received' ? (
+              <button
+                type="button"
+                className="button button-primary btn-accept"
+                disabled={actionBusy}
+                onClick={handleAcceptRequest}
+              >
+                {actionBusy ? <LoadingState label="Accepting…" /> : <>Accept connection request <Check size={15} /></>}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="button button-primary btn-connect"
+                onClick={() => setIsConnectOpen(true)}
+              >
+                Connect with {candidate.name.split(' ')[0]} <UserPlus size={15} />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Overall Score Card */}
@@ -304,6 +394,15 @@ export function MatchDetailPage() {
           </section>
         </div>
       </div>
+
+      {isConnectOpen && (
+        <ConnectModal
+          candidate={candidate}
+          isOpen={isConnectOpen}
+          onClose={() => setIsConnectOpen(false)}
+          onSend={handleSendConnection}
+        />
+      )}
     </DashboardLayout>
   );
 }

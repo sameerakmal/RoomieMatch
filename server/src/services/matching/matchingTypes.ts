@@ -86,7 +86,14 @@ export interface SafeCandidateProfile {
   };
 }
 
+export interface CandidateConnectionInfo {
+  id: string;
+  status: 'pending' | 'accepted';
+  direction: 'sent' | 'received';
+}
+
 export interface MatchDiscoveryItem {
   candidate: SafeCandidateProfile;
   compatibility: CompatibilityResult;
+  connection?: CandidateConnectionInfo | null;
 }

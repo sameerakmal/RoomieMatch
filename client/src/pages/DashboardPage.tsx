@@ -1,12 +1,17 @@
 import { useEffect, useState } from 'react';
 import {
+  ArrowRight,
   ArrowUpRight,
   CalendarDays,
   Check,
+  Clock,
   Compass,
   House,
+  Inbox,
   Moon,
+  Send,
   Sparkles,
+  UserCheck,
   UserRound,
   Users,
   Volume2,
@@ -17,8 +22,9 @@ import { DashboardLayout } from '../layouts/DashboardLayout';
 import { useAuth } from '../hooks/useAuth';
 import { profileCompletion } from '../utils/profile';
 import { preferencesService } from '../services/preferences';
+import { connectionsService } from '../services/connections';
 import { getLabel } from '../utils/preferences';
-import type { PreferencesStatus, RoommatePreferences } from '../types';
+import type { ConnectionSummary, PreferencesStatus, RoommatePreferences } from '../types';
 import quietCorner from '../assets/quiet-corner.jpg';
 
 export function DashboardPage() {
@@ -29,17 +35,20 @@ export function DashboardPage() {
 
   const [preferences, setPreferences] = useState<RoommatePreferences | null>(null);
   const [prefStatus, setPrefStatus] = useState<PreferencesStatus | null>(null);
+  const [connSummary, setConnSummary] = useState<ConnectionSummary | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     Promise.all([
       preferencesService.get(controller.signal),
       preferencesService.getStatus(controller.signal),
+      connectionsService.getSummary(controller.signal),
     ])
-      .then(([prefData, statusData]) => {
+      .then(([prefData, statusData, summaryData]) => {
         if (controller.signal.aborted) return;
         setPreferences(prefData);
         setPrefStatus(statusData);
+        setConnSummary(summaryData);
       })
       .catch(() => {
         // Silently catch to avoid crashing dashboard if offline
@@ -266,6 +275,136 @@ export function DashboardPage() {
           </div>
         </section>
       )}
+
+      {/* Section 03: Roommate Networking & Connections */}
+      <section id="connections" className="dashboard-networking-section">
+        <div className="section-heading-row">
+          <div>
+            <p className="eyebrow">03 — Your roommate network</p>
+            <h2>Connections &amp; networking</h2>
+          </div>
+          <div className="section-nav-links">
+            <ButtonLink to="/requests" variant="secondary" className="dashboard-summary-edit-btn">
+              Incoming requests ({connSummary?.incomingPendingCount ?? 0})
+            </ButtonLink>
+            <ButtonLink to="/connections" variant="secondary" className="dashboard-summary-edit-btn">
+              All connections ({connSummary?.acceptedCount ?? 0})
+            </ButtonLink>
+          </div>
+        </div>
+
+        {/* Stats Grid */}
+        <div className="dashboard-networking-grid">
+          <div className="dashboard-stat-card">
+            <div className="stat-head">
+              <Inbox size={18} className="olive" />
+              <span>Incoming requests</span>
+            </div>
+            <strong className="stat-value">{connSummary?.incomingPendingCount ?? 0}</strong>
+            <p className="stat-sub">
+              {connSummary?.incomingPendingCount === 1
+                ? '1 candidate waiting for your reply'
+                : `${connSummary?.incomingPendingCount ?? 0} candidates waiting for your reply`}
+            </p>
+            <ButtonLink to="/requests" variant="text" className="stat-link">
+              Review received requests <ArrowUpRight size={15} />
+            </ButtonLink>
+          </div>
+
+          <div className="dashboard-stat-card">
+            <div className="stat-head">
+              <Send size={18} className="olive" />
+              <span>Sent requests</span>
+            </div>
+            <strong className="stat-value">{connSummary?.outgoingPendingCount ?? 0}</strong>
+            <p className="stat-sub">
+              {connSummary?.outgoingPendingCount === 1
+                ? '1 pending request awaiting candidate response'
+                : `${connSummary?.outgoingPendingCount ?? 0} pending requests awaiting responses`}
+            </p>
+            <ButtonLink to="/requests/sent" variant="text" className="stat-link">
+              View sent requests <ArrowUpRight size={15} />
+            </ButtonLink>
+          </div>
+
+          <div className="dashboard-stat-card">
+            <div className="stat-head">
+              <UserCheck size={18} className="olive" />
+              <span>Accepted connections</span>
+            </div>
+            <strong className="stat-value">{connSummary?.acceptedCount ?? 0}</strong>
+            <p className="stat-sub">
+              {connSummary?.acceptedCount === 1
+                ? '1 mutual roommate connection'
+                : `${connSummary?.acceptedCount ?? 0} mutual roommate connections`}
+            </p>
+            <ButtonLink to="/connections" variant="text" className="stat-link">
+              View my connections <ArrowUpRight size={15} />
+            </ButtonLink>
+          </div>
+        </div>
+
+        {/* Recent Connection Activity */}
+        <div className="dashboard-activity-block">
+          <div className="activity-heading">
+            <Clock size={16} />
+            <h3>Recent networking activity</h3>
+          </div>
+          {connSummary?.recentActivity && connSummary.recentActivity.length > 0 ? (
+            <ul className="dashboard-activity-list">
+              {connSummary.recentActivity.map((act) => (
+                <li key={act.id} className="activity-item">
+                  <div className="activity-icon-bubble">
+                    {act.status === 'accepted' ? (
+                      <UserCheck size={15} className="olive" />
+                    ) : act.direction === 'sent' ? (
+                      <Send size={15} className="terracotta" />
+                    ) : (
+                      <Inbox size={15} className="olive" />
+                    )}
+                  </div>
+                  <div className="activity-info">
+                    <p className="activity-title">
+                      {act.status === 'accepted' ? (
+                        <>Connected with <strong>{act.otherUser?.name || 'Candidate'}</strong></>
+                      ) : act.status === 'rejected' ? (
+                        <>Declined request with <strong>{act.otherUser?.name || 'Candidate'}</strong></>
+                      ) : act.status === 'cancelled' ? (
+                        <>Cancelled request to <strong>{act.otherUser?.name || 'Candidate'}</strong></>
+                      ) : act.direction === 'sent' ? (
+                        <>Sent connection request to <strong>{act.otherUser?.name || 'Candidate'}</strong></>
+                      ) : (
+                        <>Received connection request from <strong>{act.otherUser?.name || 'Candidate'}</strong></>
+                      )}
+                    </p>
+                    {act.message && <p className="activity-message">“{act.message}”</p>}
+                    <span className="activity-time">
+                      {new Date(act.timestamp).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                    </span>
+                  </div>
+                  <div className="activity-action">
+                    {act.status === 'accepted' ? (
+                      <ButtonLink to={`/connections/${act.id}`} variant="text">
+                        View <ArrowRight size={14} />
+                      </ButtonLink>
+                    ) : act.direction === 'received' && act.status === 'pending' ? (
+                      <ButtonLink to="/requests" variant="text">
+                        Respond <ArrowRight size={14} />
+                      </ButtonLink>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="activity-empty">No connection activity yet. Send requests from Roommate Discovery to get started.</p>
+          )}
+        </div>
+      </section>
 
       {/* Discovery entry point */}
       <section id="recommendations" className="recommendations-section">

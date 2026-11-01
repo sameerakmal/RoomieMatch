@@ -237,9 +237,16 @@ export interface SafeCandidateProfile {
   };
 }
 
+export interface CandidateConnectionInfo {
+  id: string;
+  status: 'pending' | 'accepted';
+  direction: 'sent' | 'received';
+}
+
 export interface MatchDiscoveryItem {
   candidate: SafeCandidateProfile;
   compatibility: CompatibilityResult;
+  connection?: CandidateConnectionInfo | null;
 }
 
 export interface MatchesPagination {
@@ -257,6 +264,7 @@ export interface MatchesResponse {
 export interface MatchDetailResponse {
   candidate: SafeCandidateProfile;
   compatibility: CompatibilityResult;
+  connection?: CandidateConnectionInfo | null;
 }
 
 export interface MatchFilters {
@@ -268,3 +276,105 @@ export interface MatchFilters {
   page?: number;
   limit?: number;
 }
+
+// Phase 5: Connection Requests & Networking Types
+export type ConnectionStatus = 'pending' | 'accepted' | 'rejected' | 'cancelled';
+
+export interface ReceivedRequestItem {
+  id: string;
+  sender: SafeCandidateProfile | null;
+  message: string;
+  status: ConnectionStatus;
+  createdAt: string;
+  compatibility?: {
+    overallScore: number | null;
+    summary: string;
+    strengths: string[];
+  } | null;
+}
+
+export interface SentRequestItem {
+  id: string;
+  recipient: SafeCandidateProfile | null;
+  message: string;
+  status: ConnectionStatus;
+  createdAt: string;
+  respondedAt: string | null;
+  compatibility?: {
+    overallScore: number | null;
+    summary: string;
+    strengths: string[];
+  } | null;
+}
+
+export interface AcceptedConnectionItem {
+  id: string;
+  user: SafeCandidateProfile | null;
+  status: ConnectionStatus;
+  connectedAt: string;
+  createdAt: string;
+  compatibility?: {
+    overallScore: number | null;
+    summary: string;
+    strengths: string[];
+  } | null;
+}
+
+export interface ConnectionDetail {
+  id: string;
+  status: ConnectionStatus;
+  message: string;
+  createdAt: string;
+  respondedAt: string | null;
+  isSender: boolean;
+  user: SafeCandidateProfile;
+  compatibility: CompatibilityResult | null;
+  sharedLifestyle: { category: string; description: string }[];
+}
+
+export interface RecentActivityItem {
+  id: string;
+  status: ConnectionStatus;
+  direction: 'sent' | 'received';
+  otherUser: SafeCandidateProfile | null;
+  timestamp: string;
+  message: string;
+}
+
+export interface ConnectionSummary {
+  incomingPendingCount: number;
+  outgoingPendingCount: number;
+  acceptedCount: number;
+  recentActivity: RecentActivityItem[];
+}
+
+export interface InAppNotification {
+  id: string;
+  type: 'connection_request' | 'connection_accepted' | 'connection_rejected';
+  isRead: boolean;
+  connectionId: string;
+  createdAt: string;
+  actor: SafeCandidateProfile | null;
+}
+
+export interface NotificationsResponse {
+  notifications: InAppNotification[];
+  unreadCount: number;
+  pagination: MatchesPagination;
+}
+
+export interface ReceivedRequestsResponse {
+  requests: ReceivedRequestItem[];
+  pagination: MatchesPagination;
+}
+
+export interface SentRequestsResponse {
+  requests: SentRequestItem[];
+  pagination: MatchesPagination;
+}
+
+export interface ConnectionsResponse {
+  connections: AcceptedConnectionItem[];
+  pagination: MatchesPagination;
+}
+

@@ -2,11 +2,12 @@ import type { RequestHandler } from 'express';
 import mongoose from 'mongoose';
 import { User, type UserDocument } from '../models/User.js';
 import { RoommatePreferences, type RoommatePreferencesRecord } from '../models/RoommatePreferences.js';
+import { Connection, generatePairKey } from '../models/Connection.js';
 import { calculateCompatibility } from '../services/matching/matchingEngine.js';
-import type { MatchDiscoveryItem, SafeCandidateProfile } from '../services/matching/matchingTypes.js';
+import type { CandidateConnectionInfo, MatchDiscoveryItem, SafeCandidateProfile } from '../services/matching/matchingTypes.js';
 import { HttpError } from '../utils/HttpError.js';
 
-function toSafeProfile(user: UserDocument): SafeCandidateProfile {
+export function toSafeProfile(user: UserDocument): SafeCandidateProfile {
   return {
     id: user._id.toString(),
     name: user.name,
@@ -111,6 +112,31 @@ export const getMatches: RequestHandler = async (request, response) => {
   const startIndex = (page - 1) * limit;
   const paginatedMatches = items.slice(startIndex, startIndex + limit);
 
+  // 7. Attach real-time connection status for candidates on this page
+  const candidateIds = paginatedMatches.map((m) => new mongoose.Types.ObjectId(m.candidate.id));
+  const activeConnections = await Connection.find({
+    $or: [
+      { sender: currentUserId, recipient: { $in: candidateIds } },
+      { recipient: currentUserId, sender: { $in: candidateIds } },
+    ],
+    status: { $in: ['pending', 'accepted'] },
+  });
+
+  const connectionMap = new Map<string, CandidateConnectionInfo>();
+  for (const conn of activeConnections) {
+    const isSender = conn.sender.equals(currentUserId);
+    const otherId = isSender ? conn.recipient.toString() : conn.sender.toString();
+    connectionMap.set(otherId, {
+      id: conn._id.toString(),
+      status: conn.status as 'pending' | 'accepted',
+      direction: isSender ? 'sent' : 'received',
+    });
+  }
+
+  for (const match of paginatedMatches) {
+    match.connection = connectionMap.get(match.candidate.id) ?? null;
+  }
+
   response.json({
     matches: paginatedMatches,
     pagination: {
@@ -158,8 +184,24 @@ export const getMatchDetails: RequestHandler = async (request, response) => {
   // 3. Calculate full compatibility
   const compatibility = calculateCompatibility(userPreferences, candidatePreferences);
 
+  // 4. Check real-time connection status
+  const pairKey = generatePairKey(currentUserId, targetUserId);
+  const connection = await Connection.findOne({
+    pairKey,
+    status: { $in: ['pending', 'accepted'] },
+  });
+
+  const connectionInfo: CandidateConnectionInfo | null = connection
+    ? {
+        id: connection._id.toString(),
+        status: connection.status as 'pending' | 'accepted',
+        direction: connection.sender.equals(currentUserId) ? 'sent' : 'received',
+      }
+    : null;
+
   response.json({
     candidate: toSafeProfile(targetUser),
     compatibility,
+    connection: connectionInfo,
   });
 };

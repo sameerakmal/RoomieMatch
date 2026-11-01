@@ -1,13 +1,15 @@
 import { useEffect, useState, useId } from 'react';
-import { ArrowRight, Compass, Filter, RefreshCw, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { ArrowRight, Check, Clock, Compass, Filter, RefreshCw, SlidersHorizontal, Sparkles, UserCheck, UserPlus } from 'lucide-react';
 import { ButtonLink } from '../components/Button';
 import { LoadingState } from '../components/LoadingState';
 import { ProfileAvatar } from '../components/ProfileAvatar';
+import { ConnectModal } from '../components/ConnectModal';
 import { DashboardLayout } from '../layouts/DashboardLayout';
 import { preferencesService } from '../services/preferences';
 import { matchingService } from '../services/matching';
+import { connectionsService } from '../services/connections';
 import { apiError } from '../services/api';
-import type { MatchDiscoveryItem, MatchesPagination, MatchFilters, PreferencesStatus } from '../types';
+import type { MatchDiscoveryItem, MatchesPagination, MatchFilters, PreferencesStatus, SafeCandidateProfile } from '../types';
 
 export function DiscoverPage() {
   const [prefStatus, setPrefStatus] = useState<PreferencesStatus | null>(null);
@@ -22,6 +24,11 @@ export function DiscoverPage() {
   });
   const [loadingMatches, setLoadingMatches] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  // Connection modal state
+  const [selectedCandidate, setSelectedCandidate] = useState<SafeCandidateProfile | null>(null);
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null);
 
   // Filter state
   const [city, setCity] = useState('');
@@ -97,6 +104,61 @@ export function DiscoverPage() {
     setMinBudget('');
     setMaxBudget('');
     setCurrentPage(1);
+  };
+
+  const handleOpenConnect = (candidate: SafeCandidateProfile) => {
+    setFeedback(null);
+    setSelectedCandidate(candidate);
+  };
+
+  const handleSendConnection = async (message: string) => {
+    if (!selectedCandidate) return;
+    const candidateId = selectedCandidate.id;
+    const candidateName = selectedCandidate.name;
+    const res = await connectionsService.sendRequest(candidateId, message);
+    setMatches((prev) =>
+      prev.map((item) =>
+        item.candidate.id === candidateId
+          ? {
+              ...item,
+              connection: {
+                id: res.connection.id,
+                status: 'pending',
+                direction: 'sent',
+              },
+            }
+          : item,
+      ),
+    );
+    setFeedback(`Connection request sent to ${candidateName}.`);
+  };
+
+  const handleAcceptRequest = async (connectionId: string, candidateId: string, candidateName: string) => {
+    setActionBusyId(candidateId);
+    setError(null);
+    setFeedback(null);
+    try {
+      await connectionsService.acceptRequest(connectionId);
+      setMatches((prev) =>
+        prev.map((item) =>
+          item.candidate.id === candidateId
+            ? {
+                ...item,
+                connection: {
+                  id: connectionId,
+                  status: 'accepted',
+                  direction: 'received',
+                },
+              }
+            : item,
+        ),
+      );
+      setFeedback(`You are now connected with ${candidateName}!`);
+    } catch (err) {
+      setError(apiError(err).message);
+    } finally {
+      setActionBusyId(null);
+    }
   };
 
   return (
@@ -245,7 +307,12 @@ export function DiscoverPage() {
             </div>
           </section>
 
-          {/* Results Area */}
+          {/* Feedback & Error Area */}
+          {feedback && (
+            <div className="form-message form-message-success" role="status">
+              <Check size={16} /> {feedback}
+            </div>
+          )}
           {error && (
             <div className="form-message form-message-error" role="alert">
               {error}
@@ -283,7 +350,7 @@ export function DiscoverPage() {
               </div>
 
               <div className="matches-grid">
-                {matches.map(({ candidate, compatibility }) => (
+                {matches.map(({ candidate, compatibility, connection }) => (
                   <article key={candidate.id} className="candidate-card">
                     <div className="candidate-card-header">
                       <div className="candidate-avatar-wrap">
@@ -335,48 +402,101 @@ export function DiscoverPage() {
                       </div>
                     )}
 
-                    {/* View Details CTA */}
+                    {/* Card Actions & Connection Status */}
                     <div className="candidate-card-footer">
-                      <ButtonLink
-                        to={`/discover/${candidate.id}`}
-                        variant="secondary"
-                        className="candidate-view-btn"
-                      >
-                        View compatibility breakdown <ArrowRight size={15} />
-                      </ButtonLink>
+                      <div className="candidate-card-actions">
+                        {connection?.status === 'accepted' ? (
+                          <ButtonLink
+                            to={`/connections/${connection.id}`}
+                            variant="secondary"
+                            className="candidate-conn-btn btn-connected"
+                          >
+                            <UserCheck size={15} /> Connected
+                          </ButtonLink>
+                        ) : connection?.status === 'pending' && connection.direction === 'sent' ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="button button-secondary candidate-conn-btn btn-pending"
+                          >
+                            <Clock size={15} /> Pending
+                          </button>
+                        ) : connection?.status === 'pending' && connection.direction === 'received' ? (
+                          <button
+                            type="button"
+                            className="button button-primary candidate-conn-btn btn-accept"
+                            disabled={actionBusyId === candidate.id}
+                            onClick={() => handleAcceptRequest(connection.id, candidate.id, candidate.name)}
+                          >
+                            {actionBusyId === candidate.id ? (
+                              <LoadingState label="Accepting…" />
+                            ) : (
+                              <>
+                                Accept request <Check size={15} />
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="button button-primary candidate-conn-btn btn-connect"
+                            onClick={() => handleOpenConnect(candidate)}
+                          >
+                            Connect <UserPlus size={15} />
+                          </button>
+                        )}
+
+                        <ButtonLink
+                          to={`/discover/${candidate.id}`}
+                          variant="secondary"
+                          className="candidate-view-btn"
+                        >
+                          View breakdown <ArrowRight size={15} />
+                        </ButtonLink>
+                      </div>
                     </div>
                   </article>
                 ))}
               </div>
 
-              {/* Pagination */}
-              {pagination.totalPages > 1 && (
-                <nav className="pagination-bar" aria-label="Matches pagination">
-                  <button
-                    type="button"
-                    className="button button-secondary"
-                    disabled={pagination.page <= 1}
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  >
-                    Previous
-                  </button>
-                  <span className="pagination-info">
-                    Page {pagination.page} of {pagination.totalPages}
-                  </span>
-                  <button
-                    type="button"
-                    className="button button-secondary"
-                    disabled={pagination.page >= pagination.totalPages}
-                    onClick={() => setCurrentPage((p) => Math.min(pagination.totalPages, p + 1))}
-                  >
-                    Next
-                  </button>
-                </nav>
-              )}
-            </>
-          )}
-        </>
-      )}
-    </DashboardLayout>
-  );
+            {/* Pagination */}
+            {pagination.totalPages > 1 && (
+              <nav className="pagination-bar" aria-label="Matches pagination">
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={pagination.page <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                >
+                  Previous
+                </button>
+                <span className="pagination-info">
+                  Page {pagination.page} of {pagination.totalPages}
+                </span>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={pagination.page >= pagination.totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(pagination.totalPages, p + 1))}
+                >
+                  Next
+                </button>
+              </nav>
+            )}
+          </>
+        )}
+      </>
+    )}
+
+    {/* Connect modal dialog */}
+    {selectedCandidate && (
+      <ConnectModal
+        candidate={selectedCandidate}
+        isOpen={Boolean(selectedCandidate)}
+        onClose={() => setSelectedCandidate(null)}
+        onSend={handleSendConnection}
+      />
+    )}
+  </DashboardLayout>
+);
 }

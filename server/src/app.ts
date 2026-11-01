@@ -10,6 +10,7 @@ import { preferencesRoutes } from './routes/preferencesRoutes.js';
 import { matchingRoutes } from './routes/matchingRoutes.js';
 import { connectionRoutes } from './routes/connectionRoutes.js';
 import { notificationRoutes } from './routes/notificationRoutes.js';
+import { conversationRoutes } from './routes/conversationRoutes.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 
 export const app = express();
@@ -26,6 +27,7 @@ app.use('/api/preferences', (_request, response, next) => { response.set('Cache-
 app.use('/api/matches', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); }, matchingRoutes);
 app.use('/api/connections', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); }, connectionRoutes);
 app.use('/api/notifications', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); }, notificationRoutes);
+app.use('/api/conversations', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); }, conversationRoutes);
 app.use('/api', healthRoutes);
 app.use(notFound);
 app.use(errorHandler);

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   acceptRequest,
   cancelRequest,
+  disconnectConnection,
   getConnectionById,
   getConnections,
   getConnectionSummary,
@@ -29,4 +30,6 @@ connectionRoutes.post('/request/:userId', sendRequest);
 connectionRoutes.patch('/:id/accept', acceptRequest);
 connectionRoutes.patch('/:id/reject', rejectRequest);
 connectionRoutes.patch('/:id/cancel', cancelRequest);
+connectionRoutes.patch('/:id/disconnect', disconnectConnection);
+connectionRoutes.delete('/:id', disconnectConnection);
 

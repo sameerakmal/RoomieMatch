@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
-import { ArrowRight, Compass, Sparkles, UserCheck, Users } from 'lucide-react';
+import { ArrowRight, Compass, MessageSquare, Sparkles, UserCheck, Users } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { ButtonLink } from '../components/Button';
 import { LoadingState } from '../components/LoadingState';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { DashboardLayout } from '../layouts/DashboardLayout';
 import { connectionsService } from '../services/connections';
+import { conversationsService } from '../services/conversations';
 import { apiError } from '../services/api';
 import type { AcceptedConnectionItem, MatchesPagination } from '../types';
 
 export function ConnectionsPage() {
+  const navigate = useNavigate();
   const [connections, setConnections] = useState<AcceptedConnectionItem[]>([]);
   const [pagination, setPagination] = useState<MatchesPagination>({
     page: 1,
@@ -19,6 +22,19 @@ export function ConnectionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [messagingConnectionId, setMessagingConnectionId] = useState<string | null>(null);
+
+  const handleOpenConversation = async (connectionId: string) => {
+    try {
+      setMessagingConnectionId(connectionId);
+      const res = await conversationsService.getOrCreateConversation(connectionId);
+      navigate(`/messages/${res.conversation.id}`);
+    } catch (err) {
+      setError(apiError(err).message);
+    } finally {
+      setMessagingConnectionId(null);
+    }
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -171,12 +187,26 @@ export function ConnectionsPage() {
                   )}
 
                   <div className="connection-card-footer">
+                    <button
+                      type="button"
+                      className="button button-primary connection-message-btn"
+                      onClick={() => handleOpenConversation(item.id)}
+                      disabled={messagingConnectionId === item.id}
+                    >
+                      {messagingConnectionId === item.id ? (
+                        <LoadingState label="Opening…" />
+                      ) : (
+                        <>
+                          <MessageSquare size={14} /> Message
+                        </>
+                      )}
+                    </button>
                     <ButtonLink
                       to={`/connections/${item.id}`}
                       variant="secondary"
                       className="connection-view-btn"
                     >
-                      View connection details <ArrowRight size={15} />
+                      Details <ArrowRight size={14} />
                     </ButtonLink>
                   </div>
                 </article>

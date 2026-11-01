@@ -73,6 +73,15 @@ export const connectionsService = {
     return response.data;
   },
 
+  async disconnect(id: string, signal?: AbortSignal): Promise<{ message: string }> {
+    const response = await api.patch<{ message: string }>(
+      `/connections/${id}/disconnect`,
+      {},
+      { signal },
+    );
+    return response.data;
+  },
+
   async getConnections(
     page = 1,
     limit = 10,

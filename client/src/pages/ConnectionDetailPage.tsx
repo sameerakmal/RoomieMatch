@@ -10,20 +10,36 @@ import {
   Volume2,
   Wallet,
 } from 'lucide-react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ButtonLink } from '../components/Button';
 import { LoadingState } from '../components/LoadingState';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { DashboardLayout } from '../layouts/DashboardLayout';
 import { connectionsService } from '../services/connections';
+import { conversationsService } from '../services/conversations';
 import { apiError } from '../services/api';
 import type { ConnectionDetail } from '../types';
 
 export function ConnectionDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [connection, setConnection] = useState<ConnectionDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [openingChat, setOpeningChat] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleOpenConversation = async () => {
+    if (!id) return;
+    try {
+      setOpeningChat(true);
+      const res = await conversationsService.getOrCreateConversation(id);
+      navigate(`/messages/${res.conversation.id}`);
+    } catch (err) {
+      setError(apiError(err).message);
+    } finally {
+      setOpeningChat(false);
+    }
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -122,6 +138,20 @@ export function ConnectionDetailPage() {
             <span className="status-badge status-accepted">
               <UserCheck size={14} /> Connected since {formatDate(respondedAt || createdAt)}
             </span>
+            <button
+              type="button"
+              className="button button-primary connection-detail-message-btn"
+              onClick={handleOpenConversation}
+              disabled={openingChat}
+            >
+              {openingChat ? (
+                <LoadingState label="Opening chat…" />
+              ) : (
+                <>
+                  <MessageSquare size={14} /> Message {user.name.split(' ')[0]}
+                </>
+              )}
+            </button>
           </div>
         </div>
 

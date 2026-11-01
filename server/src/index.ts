@@ -1,14 +1,19 @@
+import http from 'node:http';
 import mongoose from 'mongoose';
 import { app } from './app.js';
 import { env } from './config/env.js';
 import { connectDatabase } from './config/database.js';
+import { initSocketServer } from './realtime/socketServer.js';
 
 async function start(): Promise<void> {
   await connectDatabase();
-  const server = app.listen(env.port, error => {
-    if (!error) console.info(`RoomieMatch API: http://localhost:${env.port}`);
+  const httpServer = http.createServer(app);
+  initSocketServer(httpServer);
+
+  httpServer.listen(env.port, () => {
+    console.info(`RoomieMatch API & Socket.IO: http://localhost:${env.port}`);
   });
-  server.on('error', async () => {
+  httpServer.on('error', async () => {
     console.error('Unable to start HTTP server. Check PORT availability.');
     await mongoose.disconnect();
     process.exit(1);
@@ -19,7 +24,7 @@ async function start(): Promise<void> {
     stopping = true;
     const timeout = setTimeout(() => process.exit(1), 10000);
     timeout.unref();
-    server.close(() => {
+    httpServer.close(() => {
       void mongoose.disconnect().then(() => { clearTimeout(timeout); process.exit(0); }).catch(() => process.exit(1));
     });
   }

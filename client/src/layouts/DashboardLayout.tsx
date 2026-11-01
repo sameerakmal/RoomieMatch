@@ -8,6 +8,7 @@ import {
   Inbox,
   Leaf,
   LogOut,
+  MessageSquare,
   SlidersHorizontal,
   UserCheck,
   UserRound,
@@ -23,6 +24,8 @@ import { useAuth } from '../hooks/useAuth';
 import { useHealth } from '../hooks/useHealth';
 import { apiError } from '../services/api';
 import { connectionsService } from '../services/connections';
+import { conversationsService } from '../services/conversations';
+import { getSocket } from '../services/socket';
 import { notificationsService } from '../services/notifications';
 import type { InAppNotification } from '../types';
 
@@ -36,6 +39,7 @@ export function DashboardLayout({ children, title = 'Your home base' }: { childr
   // Notifications and badge state
   const [notifications, setNotifications] = useState<InAppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
   const [notifOpen, setNotifOpen] = useState(false);
   const notifDropdownRef = useRef<HTMLDivElement>(null);
@@ -60,7 +64,36 @@ export function DashboardLayout({ children, title = 'Your home base' }: { childr
       })
       .catch(() => {});
 
+    // Fetch unread message count for sidebar badge
+    conversationsService
+      .getUnreadCount(controller.signal)
+      .then((data) => {
+        setUnreadMessagesCount(data.unreadCount);
+      })
+      .catch(() => {});
+
     return () => controller.abort();
+  }, []);
+
+  // Listen for socket events to update unread message count in real time
+  useEffect(() => {
+    const socket = getSocket();
+    const handleUpdate = () => {
+      conversationsService
+        .getUnreadCount()
+        .then((data) => setUnreadMessagesCount(data.unreadCount))
+        .catch(() => {});
+    };
+
+    socket.on('conversation:updated', handleUpdate);
+    socket.on('message:new', handleUpdate);
+    socket.on('message:read:update', handleUpdate);
+
+    return () => {
+      socket.off('conversation:updated', handleUpdate);
+      socket.off('message:new', handleUpdate);
+      socket.off('message:read:update', handleUpdate);
+    };
   }, []);
 
   // Close notifications dropdown on click outside
@@ -175,6 +208,12 @@ export function DashboardLayout({ children, title = 'Your home base' }: { childr
           </NavLink>
           <NavLink to="/connections">
             <Users size={19} /> Connections
+          </NavLink>
+          <NavLink to="/messages">
+            <MessageSquare size={19} /> Messages
+            {unreadMessagesCount > 0 && (
+              <span className="sidebar-badge">{unreadMessagesCount}</span>
+            )}
           </NavLink>
         </nav>
         <div className="sidebar-bottom">

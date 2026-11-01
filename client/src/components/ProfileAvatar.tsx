@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { UserRound } from 'lucide-react';
 
-export function ProfileAvatar({ name, url, large = false }: { name: string; url: string; large?: boolean }) {
+export function ProfileAvatar({ name, url = '', large = false }: { name: string; url?: string; large?: boolean }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   return <span className={`profile-avatar ${large ? 'profile-avatar-large' : ''}`}>
     {url && failedUrl !== url

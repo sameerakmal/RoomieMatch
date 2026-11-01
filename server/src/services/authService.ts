@@ -20,6 +20,18 @@ export function authenticateResponse(response: Response, user: UserDocument): vo
 export function clearAuthentication(response: Response): void {
   response.clearCookie(authCookieName, cookieOptions);
 }
+export function verifyAuthToken(token: unknown): string {
+  if (typeof token !== 'string') throw new Error('Missing token');
+  const payload = jwt.verify(token, env.jwtSecret, {
+    algorithms: ['HS256'],
+    issuer: jwtOptions.issuer,
+    audience: jwtOptions.audience,
+  });
+  if (typeof payload === 'string' || !payload.sub || !/^[a-f\d]{24}$/i.test(payload.sub) || typeof payload.exp !== 'number') {
+    throw new Error('Invalid subject or expiration');
+  }
+  return payload.sub;
+}
 export async function registerUser(name: string, email: string, password: string): Promise<UserDocument> {
   if (await User.exists({ email })) throw new HttpError(409, 'An account with this email already exists.', { email: 'This email is already registered. Try logging in.' });
   const passwordHash = await bcrypt.hash(password, bcryptRounds);

@@ -8,6 +8,7 @@ import {
   Compass,
   House,
   Inbox,
+  MessageSquare,
   Moon,
   Send,
   Sparkles,
@@ -23,8 +24,9 @@ import { useAuth } from '../hooks/useAuth';
 import { profileCompletion } from '../utils/profile';
 import { preferencesService } from '../services/preferences';
 import { connectionsService } from '../services/connections';
+import { conversationsService } from '../services/conversations';
 import { getLabel } from '../utils/preferences';
-import type { ConnectionSummary, PreferencesStatus, RoommatePreferences } from '../types';
+import type { ConnectionSummary, ConversationItem, PreferencesStatus, RoommatePreferences } from '../types';
 import quietCorner from '../assets/quiet-corner.jpg';
 
 export function DashboardPage() {
@@ -36,6 +38,8 @@ export function DashboardPage() {
   const [preferences, setPreferences] = useState<RoommatePreferences | null>(null);
   const [prefStatus, setPrefStatus] = useState<PreferencesStatus | null>(null);
   const [connSummary, setConnSummary] = useState<ConnectionSummary | null>(null);
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -43,12 +47,16 @@ export function DashboardPage() {
       preferencesService.get(controller.signal),
       preferencesService.getStatus(controller.signal),
       connectionsService.getSummary(controller.signal),
+      conversationsService.getConversations(controller.signal),
+      conversationsService.getUnreadCount(controller.signal),
     ])
-      .then(([prefData, statusData, summaryData]) => {
+      .then(([prefData, statusData, summaryData, convsData, unreadData]) => {
         if (controller.signal.aborted) return;
         setPreferences(prefData);
         setPrefStatus(statusData);
         setConnSummary(summaryData);
+        setConversations(convsData.conversations);
+        setUnreadMessagesCount(unreadData.unreadCount);
       })
       .catch(() => {
         // Silently catch to avoid crashing dashboard if offline
@@ -290,6 +298,9 @@ export function DashboardPage() {
             <ButtonLink to="/connections" variant="secondary" className="dashboard-summary-edit-btn">
               All connections ({connSummary?.acceptedCount ?? 0})
             </ButtonLink>
+            <ButtonLink to="/messages" variant="secondary" className="dashboard-summary-edit-btn">
+              Messages {unreadMessagesCount > 0 ? `(${unreadMessagesCount} unread)` : `(${conversations.length})`}
+            </ButtonLink>
           </div>
         </div>
 
@@ -340,6 +351,24 @@ export function DashboardPage() {
             </p>
             <ButtonLink to="/connections" variant="text" className="stat-link">
               View my connections <ArrowUpRight size={15} />
+            </ButtonLink>
+          </div>
+
+          <div className="dashboard-stat-card">
+            <div className="stat-head">
+              <MessageSquare size={18} className="olive" />
+              <span>Active messages</span>
+            </div>
+            <strong className="stat-value">{conversations.length}</strong>
+            <p className="stat-sub">
+              {unreadMessagesCount > 0
+                ? `${unreadMessagesCount} unread message${unreadMessagesCount === 1 ? '' : 's'} waiting for you`
+                : conversations.length > 0
+                ? `${conversations.length} active conversation${conversations.length === 1 ? '' : 's'}`
+                : 'Connect with candidates to start chatting'}
+            </p>
+            <ButtonLink to="/messages" variant="text" className="stat-link">
+              Open messages <ArrowUpRight size={15} />
             </ButtonLink>
           </div>
         </div>
@@ -404,6 +433,52 @@ export function DashboardPage() {
             <p className="activity-empty">No connection activity yet. Send requests from Roommate Discovery to get started.</p>
           )}
         </div>
+
+        {/* Recent Chats Preview */}
+        {conversations.length > 0 && (
+          <div className="dashboard-activity-block" style={{ marginTop: 24 }}>
+            <div className="activity-heading">
+              <MessageSquare size={16} />
+              <h3>Recent roommate chats</h3>
+            </div>
+            <ul className="dashboard-activity-list">
+              {conversations.slice(0, 3).map((conv) => (
+                <li key={conv.id} className="activity-item">
+                  <div className="activity-icon-bubble">
+                    <MessageSquare size={15} className="olive" />
+                  </div>
+                  <div className="activity-info">
+                    <p className="activity-title">
+                      Chat with <strong>{conv.otherParticipant?.name || 'Roommate'}</strong>
+                      {conv.unreadCount > 0 && (
+                        <span className="sidebar-badge" style={{ marginLeft: 8 }}>
+                          {conv.unreadCount} new
+                        </span>
+                      )}
+                    </p>
+                    {conv.lastMessage && (
+                      <p className="activity-message">
+                        {conv.lastMessage.senderId === currentUser.id && 'You: '}
+                        “{conv.lastMessage.content}”
+                      </p>
+                    )}
+                    <span className="activity-time">
+                      {new Date(conv.lastMessageAt || conv.updatedAt).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </span>
+                  </div>
+                  <div className="activity-action">
+                    <ButtonLink to={`/messages/${conv.id}`} variant="text">
+                      Chat <ArrowRight size={14} />
+                    </ButtonLink>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       {/* Discovery entry point */}

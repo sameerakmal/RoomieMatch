@@ -378,3 +378,59 @@ export interface ConnectionsResponse {
   pagination: MatchesPagination;
 }
 
+// Phase 6: Real-Time Chat & Messaging Types
+export interface MessageItem {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  content: string;
+  messageType: 'text' | 'system';
+  readBy: string[];
+  createdAt: string;
+  idempotencyKey?: string;
+  pending?: boolean;
+  failed?: boolean;
+}
+
+export interface ConversationItem {
+  id: string;
+  connectionId: string;
+  otherParticipant: SafeCandidateProfile | null;
+  lastMessage: MessageItem | null;
+  lastMessageAt: string | null;
+  unreadCount: number;
+  isOnline: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConversationsResponse {
+  conversations: ConversationItem[];
+  totalUnread: number;
+}
+
+export interface MessagesResponse {
+  messages: MessageItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export interface TypingUpdate {
+  conversationId: string;
+  userId: string;
+  isTyping: boolean;
+}
+
+export interface PresenceUpdate {
+  userId: string;
+  isOnline: boolean;
+  timestamp: string;
+}
+
+export interface ReadReceiptUpdate {
+  conversationId: string;
+  readerId: string;
+  readAt: string;
+}
+
+

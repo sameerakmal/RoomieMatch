@@ -6,6 +6,7 @@ import { User, type UserDocument } from '../models/User.js';
 import { RoommatePreferences } from '../models/RoommatePreferences.js';
 import { calculateCompatibility } from '../services/matching/matchingEngine.js';
 import { toSafeProfile } from './matchingController.js';
+import { revokeConnectionConversations } from '../realtime/socketServer.js';
 import { HttpError } from '../utils/HttpError.js';
 
 function formatEnumLabel(val: string | undefined): string {
@@ -367,6 +368,9 @@ export const rejectRequest: RequestHandler = async (request, response) => {
     connectionId: connection._id,
   }).catch(() => {});
 
+  // After database status update succeeds, ensure any associated conversation is revoked
+  await revokeConnectionConversations(connection._id);
+
   return response.json({
     connection: formatConnectionBasic(connection, currentUserId),
     message: 'Connection request rejected.',
@@ -411,9 +415,59 @@ export const cancelRequest: RequestHandler = async (request, response) => {
   connection.respondedAt = new Date();
   await connection.save();
 
+  // After database status update succeeds, ensure any associated conversation is revoked
+  await revokeConnectionConversations(connection._id);
+
   return response.json({
     connection: formatConnectionBasic(connection, currentUserId),
     message: 'Connection request cancelled.',
+  });
+};
+
+export const disconnectConnection: RequestHandler = async (request, response) => {
+  const currentUserId = request.user!._id;
+  const idParam = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id;
+
+  if (!isValidObjectId(idParam)) {
+    throw new HttpError(400, 'Invalid connection ID.');
+  }
+
+  const connection = await Connection.findById(idParam);
+  if (!connection) {
+    throw new HttpError(404, 'Connection not found.');
+  }
+
+  // Authorization: Either participant (sender or recipient) can terminate an accepted connection
+  const isSender = connection.sender.equals(currentUserId);
+  const isRecipient = connection.recipient.equals(currentUserId);
+  if (!isSender && !isRecipient) {
+    throw new HttpError(403, 'You are not authorized to disconnect this connection.');
+  }
+
+  if (connection.status !== 'accepted') {
+    throw new HttpError(400, `Cannot disconnect a connection that is ${connection.status}.`);
+  }
+
+  // Update status in MongoDB
+  connection.status = 'cancelled';
+  connection.respondedAt = new Date();
+  await connection.save();
+
+  // Crucially, after database status update succeeds, revoke active socket rooms and typing state
+  await revokeConnectionConversations(connection._id);
+
+  // Notify the other participant
+  const otherUserId = isSender ? connection.recipient : connection.sender;
+  await Notification.create({
+    recipient: otherUserId,
+    actor: currentUserId,
+    type: 'connection_rejected',
+    connectionId: connection._id,
+  }).catch(() => {});
+
+  return response.json({
+    connection: formatConnectionBasic(connection, currentUserId),
+    message: 'Connection disconnected and conversations revoked.',
   });
 };
 

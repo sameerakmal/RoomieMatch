@@ -18,7 +18,8 @@
     "express": "^5.1.0",
     "express-rate-limit": "^8.7.2",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^8.19.2"
+    "mongoose": "^8.19.2",
+    "socket.io": "^4.8.4"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
@@ -28,6 +29,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.18.12",
     "mongodb-memory-server-core": "^10.4.3",
+    "socket.io-client": "^4.8.4",
     "tsx": "^4.20.6",
     "typescript": "~5.9.3"
   }

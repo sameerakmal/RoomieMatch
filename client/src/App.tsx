@@ -12,6 +12,7 @@ import { IncomingRequestsPage } from './pages/IncomingRequestsPage';
 import { SentRequestsPage } from './pages/SentRequestsPage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { ConnectionDetailPage } from './pages/ConnectionDetailPage';
+import { MessagesPage } from './pages/MessagesPage';
 import { AuthRoute } from './components/AuthRoute';
 
 export function App() {
@@ -30,11 +31,14 @@ export function App() {
       '/requests': 'Incoming requests',
       '/requests/sent': 'Sent requests',
       '/connections': 'My connections',
+      '/messages': 'Roommate messages',
     };
     const resolvedTitle = pathname.startsWith('/discover/')
       ? 'Compatibility breakdown'
       : pathname.startsWith('/connections/')
       ? 'Connection details'
+      : pathname.startsWith('/messages/')
+      ? 'Conversation'
       : (titles[pathname] ?? 'Page not found');
     document.title = `RoomieMatch — ${resolvedTitle}`;
   }, [pathname, hash]);
@@ -54,6 +58,8 @@ export function App() {
       <Route path="/requests/sent" element={<SentRequestsPage />} />
       <Route path="/connections" element={<ConnectionsPage />} />
       <Route path="/connections/:id" element={<ConnectionDetailPage />} />
+      <Route path="/messages" element={<MessagesPage />} />
+      <Route path="/messages/:conversationId" element={<MessagesPage />} />
     </Route>
     <Route path="*" element={<NotFoundPage />} />
   </Routes>;
